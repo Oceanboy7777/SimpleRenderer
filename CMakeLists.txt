@@ -89,6 +89,12 @@ add_executable(SimpleRenderer
     src/engine/Material.cpp
     src/engine/Renderer.cpp
     src/engine/Shader.cpp
+
+    # UI system
+    src/ui/UIContext.cpp
+    src/ui/Widget.cpp
+    src/ui/Panel.cpp
+    src/ui/Button.cpp
 )
 
 target_include_directories(SimpleRenderer PRIVATE

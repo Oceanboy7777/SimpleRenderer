@@ -1,271 +1,132 @@
-
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
 
 #include "engine/Camera.hpp"
 #include "engine/Renderer.hpp"
 #include "engine/Scene.hpp"
+#include "ui/UIContext.hpp"
+#include "ui/Panel.hpp"
+#include "ui/Button.hpp"
 
-#include <glm/glm.hpp>
-
-#include <algorithm>
-#include <cstdlib>
 #include <iostream>
+#include <memory>
 
 namespace
 {
-    constexpr int windowWidth = 1280;
-    constexpr int windowHeight = 720;
+    UIContext* g_ui = nullptr;
 
-    struct InputState
+    void cursorPosCallback(GLFWwindow* window, double x, double y)
     {
-        Camera* camera = nullptr;
-        bool firstMouseMovement = true;
-        double lastMouseX = 0.0;
-        double lastMouseY = 0.0;
-    };
-
-    void cursorPositionCallback(
-        GLFWwindow* window,
-        double mouseX,
-        double mouseY
-    )
-    {
-        auto* input = static_cast<InputState*>(
-            glfwGetWindowUserPointer(window)
-            );
-
-        if (input == nullptr || input->camera == nullptr)
-        {
-            return;
-        }
-
-        if (input->firstMouseMovement)
-        {
-            input->lastMouseX = mouseX;
-            input->lastMouseY = mouseY;
-            input->firstMouseMovement = false;
-            return;
-        }
-
-        const float xOffset = static_cast<float>(
-            mouseX - input->lastMouseX
-            );
-
-        const float yOffset = static_cast<float>(
-            input->lastMouseY - mouseY
-            );
-
-        input->lastMouseX = mouseX;
-        input->lastMouseY = mouseY;
-
-        input->camera->processMouseMovement(xOffset, yOffset);
+        if (g_ui) g_ui->onMouseMove(x, y);
     }
 
-    void scrollCallback(
-        GLFWwindow* window,
-        double xOffset,
-        double yOffset
-    )
+    void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
     {
-        (void)xOffset;
-
-        auto* input = static_cast<InputState*>(
-            glfwGetWindowUserPointer(window)
-            );
-
-        if (input != nullptr && input->camera != nullptr)
-        {
-            input->camera->processMouseScroll(
-                static_cast<float>(yOffset)
-            );
-        }
+        if (g_ui) g_ui->onMouseButton(button, action, mods);
     }
 
-    void processInput(
-        GLFWwindow* window,
-        Camera& camera,
-        float deltaTime
-    )
+    void framebufferSizeCallback(GLFWwindow* window, int width, int height)
     {
-        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-        {
-            glfwSetWindowShouldClose(window, GLFW_TRUE);
-        }
-
-        glm::vec3 movement(0.0f);
-
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-        {
-            movement += camera.getFront();
-        }
-
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-        {
-            movement -= camera.getFront();
-        }
-
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-        {
-            movement += camera.getRight();
-        }
-
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-        {
-            movement -= camera.getRight();
-        }
-
-        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS)
-        {
-            movement.y += 1.0f;
-        }
-
-        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS)
-        {
-            movement.y -= 1.0f;
-        }
-
-        // Normalise diagonal movement so it isn't faster.
-        const float movementLength = glm::length(movement);
-
-        if (movementLength > 0.0f)
-        {
-            movement /= movementLength;
-            camera.processKeyboard(movement, deltaTime);
-        }
+        if (g_ui) g_ui->onFramebufferSize(width, height);
+        glViewport(0, 0, width, height);
     }
 }
 
 int main()
 {
-    if (glfwInit() != GLFW_TRUE)
-    {
-        std::cerr << "Failed to initialise GLFW.\n";
-        return EXIT_FAILURE;
-    }
+    if (!glfwInit()) return 1;
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(
-        GLFW_OPENGL_PROFILE,
-        GLFW_OPENGL_CORE_PROFILE
-    );
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(
-        windowWidth,
-        windowHeight,
-        "SimpleRenderer - Milestone 9",
-        nullptr,
-        nullptr
-    );
-
-    if (window == nullptr)
+    GLFWwindow* window = glfwCreateWindow(1280, 720, "SimpleRenderer - UI Test", nullptr, nullptr);
+    if (!window)
     {
-        std::cerr << "Failed to create the application window.\n";
         glfwTerminate();
-        return EXIT_FAILURE;
+        return 1;
     }
 
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 
-    if (gladLoadGL(
-        reinterpret_cast<GLADloadfunc>(glfwGetProcAddress)
-    ) == 0)
+    if (!gladLoadGL((GLADloadfunc)glfwGetProcAddress))
     {
-        std::cerr << "Failed to load OpenGL functions.\n";
-
-        glfwDestroyWindow(window);
-        glfwTerminate();
-
-        return EXIT_FAILURE;
+        std::cerr << "Failed to load OpenGL\n";
+        return 1;
     }
 
     glEnable(GL_DEPTH_TEST);
     glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
 
-    int framebufferWidth = 0;
-    int framebufferHeight = 0;
+    // --- UI setup ---
+    UIContext ui;
+    g_ui = &ui;
 
-    glfwGetFramebufferSize(
-        window,
-        &framebufferWidth,
-        &framebufferHeight
-    );
-
-    glViewport(0, 0, framebufferWidth, framebufferHeight);
-
-    Camera camera;
-
-    InputState input;
-    input.camera = &camera;
-
-    glfwSetWindowUserPointer(window, &input);
-
-    glfwSetCursorPosCallback(window, cursorPositionCallback);
-    glfwSetScrollCallback(window, scrollCallback);
-
-    // Capture the mouse for first-person camera control.
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-
-    int result = EXIT_SUCCESS;
-
-    // Keep engine resources inside this scope.
-    // They are destroyed before the OpenGL context is destroyed.
+    if (!ui.init())
     {
-        Scene scene;
-        Renderer renderer;
-
-        if (!renderer.isValid())
-        {
-            std::cerr << "Failed to initialise the renderer.\n";
-            result = EXIT_FAILURE;
-        }
-        else
-        {
-            std::cout << "SimpleRenderer Milestone 9 started.\n";
-            std::cout << "Directional shadow mapping enabled.\n";
-            std::cout << "WASD: move | Mouse: look | E/Q: up/down\n";
-            std::cout << "Mouse wheel: adjust field of view | Esc: exit\n";
-
-            float lastFrameTime = 0.0f;
-
-            while (glfwWindowShouldClose(window) == GLFW_FALSE)
-            {
-                const float currentFrameTime =
-                    static_cast<float>(glfwGetTime());
-
-                const float deltaTime = std::min(
-                    currentFrameTime - lastFrameTime,
-                    0.1f
-                );
-
-                lastFrameTime = currentFrameTime;
-
-                processInput(window, camera, deltaTime);
-                scene.update(deltaTime);
-
-                glfwGetFramebufferSize(
-                    window,
-                    &framebufferWidth,
-                    &framebufferHeight
-                );
-
-                renderer.render(
-                    scene,
-                    camera,
-                    framebufferWidth,
-                    framebufferHeight
-                );
-
-                glfwSwapBuffers(window);
-                glfwPollEvents();
-            }
-        }
+        std::cerr << "Failed to init UI\n";
+        return 1;
     }
 
+    // Create a test panel
+    auto panel = std::make_unique<Panel>();
+    panel->setPosition({ 50.0f, 50.0f });
+    panel->setSize({ 280.0f, 400.0f });
+
+    // Add a button inside the panel
+    auto button = std::make_unique<Button>();
+    button->setPosition({ 70.0f, 80.0f });   // relative to screen for now
+    button->setSize({ 140.0f, 36.0f });
+    button->setLabel("Click Me");
+    button->setOnClick([]() {
+        std::cout << "Button clicked!\n";
+        });
+
+    panel->addChild(std::move(button));
+    ui.getRoot().addChild(std::move(panel));
+
+    // Callbacks
+    glfwSetCursorPosCallback(window, cursorPosCallback);
+    glfwSetMouseButtonCallback(window, mouseButtonCallback);
+    glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
+
+    // Show the mouse cursor (important for UI)
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+
+    Scene scene;
+    Renderer renderer;
+    Camera camera;
+
+    float lastTime = 0.0f;
+
+    while (!glfwWindowShouldClose(window))
+    {
+        float currentTime = static_cast<float>(glfwGetTime());
+        float deltaTime = currentTime - lastTime;
+        lastTime = currentTime;
+
+        int width, height;
+        glfwGetFramebufferSize(window, &width, &height);
+
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        // 3D scene
+        if (renderer.isValid())
+        {
+            renderer.render(scene, camera, width, height);
+        }
+
+        // UI on top
+        ui.beginFrame(deltaTime);
+        ui.endFrame();
+
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+    }
+
+    g_ui = nullptr;
     glfwDestroyWindow(window);
     glfwTerminate();
-
-    return result;
+    return 0;
 }
