@@ -154,7 +154,7 @@ int main()
     GLFWwindow* window = glfwCreateWindow(
         windowWidth,
         windowHeight,
-        "SimpleRenderer - Milestone 8",
+        "SimpleRenderer - Milestone 9",
         nullptr,
         nullptr
     );
@@ -223,7 +223,8 @@ int main()
         }
         else
         {
-            std::cout << "SimpleRenderer Milestone 8 started.\n";
+            std::cout << "SimpleRenderer Milestone 9 started.\n";
+            std::cout << "Directional shadow mapping enabled.\n";
             std::cout << "WASD: move | Mouse: look | E/Q: up/down\n";
             std::cout << "Mouse wheel: adjust field of view | Esc: exit\n";
 

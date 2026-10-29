@@ -8,6 +8,8 @@
 #include "Scene.hpp"
 #include "Shader.hpp"
 
+#include <glad/gl.h>
+
 #include <memory>
 
 class Renderer
@@ -29,7 +31,16 @@ public:
     );
 
 private:
+    bool createShadowResources();
+    void renderShadowPass(const Scene& scene);
+    void drawObject(
+        const Scene& scene,
+        const GameObject& object,
+        const Shader& targetShader
+    ) const;
+
     Shader shader;
+    Shader shadowShader;
 
     Mesh cubeMesh;
     Mesh planeMesh;
@@ -38,4 +49,9 @@ private:
     Material groundMaterial;
 
     std::unique_ptr<Mesh> importedMesh;
+
+    GLuint shadowFramebuffer;
+    GLuint shadowDepthTexture;
+
+    int shadowMapSize;
 };
