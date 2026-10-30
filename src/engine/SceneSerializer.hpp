@@ -6,7 +6,9 @@
 class SceneSerializer
 {
 public:
-    // Returns true on success
-    static bool save(const Scene& scene, const std::string& path);
-    static bool load(Scene& scene, const std::string& path);
+    // Uses SIMPLERENDERER_ASSET_DIR/scenes/main.scene by default
+    static std::string defaultScenePath();
+
+    static bool save(const Scene& scene, const std::string& path = "");
+    static bool load(Scene& scene, const std::string& path = "");
 };

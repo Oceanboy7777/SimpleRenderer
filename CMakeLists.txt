@@ -105,13 +105,14 @@ add_executable(SimpleRenderer
 )
 
 target_include_directories(SimpleRenderer PRIVATE
-    "${CMAKE_SOURCE_DIR}/src"          
+    "${CMAKE_SOURCE_DIR}/src"
     "${stb_SOURCE_DIR}"
 )
 
 target_compile_definitions(SimpleRenderer PRIVATE
     SIMPLERENDERER_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets"
 )
+
 
 target_link_libraries(SimpleRenderer PRIVATE
     glfw

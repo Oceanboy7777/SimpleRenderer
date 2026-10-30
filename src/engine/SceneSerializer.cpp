@@ -4,13 +4,43 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <vector>
+#include <filesystem>
+#include <cstdint>
+
+namespace fs = std::filesystem;
+
+std::string SceneSerializer::defaultScenePath()
+{
+#ifdef SIMPLERENDERER_ASSET_DIR
+    // Absolute path baked in at compile time — does not depend on cwd
+    return std::string(SIMPLERENDERER_ASSET_DIR) + "/scenes/main.scene";
+#else
+    return "assets/scenes/main.scene";
+#endif
+}
 
 bool SceneSerializer::save(const Scene& scene, const std::string& path)
 {
-    std::ofstream file(path);
+    const std::string finalPath = path.empty() ? defaultScenePath() : path;
+
+    try
+    {
+        fs::path p(finalPath);
+        if (p.has_parent_path())
+            fs::create_directories(p.parent_path());
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "[SceneSerializer] create_directories failed: " << e.what() << "\n";
+        return false;
+    }
+
+    std::ofstream file(finalPath, std::ios::out | std::ios::trunc);
     if (!file.is_open())
     {
-        std::cerr << "Failed to open scene for writing: " << path << "\n";
+        std::cerr << "[SceneSerializer] Failed to WRITE: " << finalPath << "\n";
+        std::cerr << "[SceneSerializer] cwd = " << fs::current_path().string() << "\n";
         return false;
     }
 
@@ -18,45 +48,55 @@ bool SceneSerializer::save(const Scene& scene, const std::string& path)
 
     for (const auto& obj : scene.getObjects())
     {
-        // Skip nothing — save everything including Ground
         const glm::vec3 p = obj->getPosition();
         const glm::vec3 s = obj->getScale();
         const glm::vec3 c = obj->getColor();
 
-        int mesh = static_cast<int>(obj->getMeshType());
-        int mat = static_cast<int>(obj->getMaterialType());
+        const int mesh = static_cast<int>(obj->getMeshType());
+        const int mat = static_cast<int>(obj->getMaterialType());
 
-        // name can contain spaces → wrap in quotes
         file << "object \"" << obj->getName() << "\" "
-            << p.x << " " << p.y << " " << p.z << " "
-            << s.x << " " << s.y << " " << s.z << " "
-            << c.r << " " << c.g << " " << c.b << " "
-            << mesh << " " << mat << "\n";
+            << p.x << ' ' << p.y << ' ' << p.z << ' '
+            << s.x << ' ' << s.y << ' ' << s.z << ' '
+            << c.r << ' ' << c.g << ' ' << c.b << ' '
+            << mesh << ' ' << mat << '\n';
     }
 
-    std::cout << "Scene saved: " << path << "\n";
+    file.flush();
+    if (!file.good())
+    {
+        std::cerr << "[SceneSerializer] Write error after flush: " << finalPath << "\n";
+        return false;
+    }
+
+    std::cout << "[SceneSerializer] Saved " << scene.getObjects().size()
+        << " objects -> " << finalPath << "\n";
     return true;
 }
 
 bool SceneSerializer::load(Scene& scene, const std::string& path)
 {
-    std::ifstream file(path);
+    const std::string finalPath = path.empty() ? defaultScenePath() : path;
+
+    std::ifstream file(finalPath);
     if (!file.is_open())
     {
-        std::cerr << "Failed to open scene for reading: " << path << "\n";
+        std::cerr << "[SceneSerializer] Failed to READ: " << finalPath << "\n";
+        std::cerr << "[SceneSerializer] cwd = " << fs::current_path().string() << "\n";
         return false;
     }
 
-    // Clear existing objects by removing them one by one
-    // (we collect ids first because we can't mutate while iterating easily)
+    // Remove all current objects
     {
         std::vector<std::uint64_t> ids;
+        ids.reserve(scene.getObjects().size());
         for (const auto& obj : scene.getObjects())
             ids.push_back(obj->getId());
         for (std::uint64_t id : ids)
             scene.removeObject(id);
     }
 
+    int loaded = 0;
     std::string line;
     while (std::getline(file, line))
     {
@@ -69,12 +109,11 @@ bool SceneSerializer::load(Scene& scene, const std::string& path)
         if (tag != "object")
             continue;
 
-        // Read quoted name
-        std::string name;
         ss >> std::ws;
+        std::string name;
         if (ss.peek() == '"')
         {
-            ss.get(); // skip "
+            ss.get();
             std::getline(ss, name, '"');
         }
         else
@@ -83,28 +122,36 @@ bool SceneSerializer::load(Scene& scene, const std::string& path)
         }
 
         float px, py, pz, sx, sy, sz, cr, cg, cb;
-        int mesh, mat;
+        int mesh = 0, mat = 0;
         if (!(ss >> px >> py >> pz >> sx >> sy >> sz >> cr >> cg >> cb >> mesh >> mat))
+        {
+            std::cerr << "[SceneSerializer] Skipping bad line: " << line << "\n";
             continue;
+        }
 
         MeshType meshType = MeshType::Cube;
-        if (mesh == static_cast<int>(MeshType::Plane)) meshType = MeshType::Plane;
-        else if (mesh == static_cast<int>(MeshType::ImportedModel)) meshType = MeshType::ImportedModel;
+        if (mesh == static_cast<int>(MeshType::Plane))
+            meshType = MeshType::Plane;
+        else if (mesh == static_cast<int>(MeshType::ImportedModel))
+            meshType = MeshType::ImportedModel;
 
         MaterialType matType = MaterialType::Default;
-        if (mat == static_cast<int>(MaterialType::Ground)) matType = MaterialType::Ground;
+        if (mat == static_cast<int>(MaterialType::Ground))
+            matType = MaterialType::Ground;
 
         scene.createObject(
             name,
             glm::vec3(px, py, pz),
             glm::vec3(sx, sy, sz),
             glm::vec3(cr, cg, cb),
-            0.0f,          // no auto-spin on load
+            0.0f,
             meshType,
             matType
         );
+        ++loaded;
     }
 
-    std::cout << "Scene loaded: " << path << "\n";
-    return true;
+    std::cout << "[SceneSerializer] Loaded " << loaded
+        << " objects <- " << finalPath << "\n";
+    return loaded > 0 || true; // empty scene file is still "success"
 }

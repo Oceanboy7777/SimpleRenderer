@@ -202,13 +202,13 @@ bool HierarchyPanel::onMouseButton(int button, int action, const glm::vec2& worl
 void HierarchyPanel::saveScene()
 {
     if (!scene) return;
-    SceneSerializer::save(*scene, "assets/scenes/main.scene");
+    SceneSerializer::save(*scene);   // empty path → defaultScenePath()
 }
 
 void HierarchyPanel::loadScene()
 {
     if (!scene) return;
-    SceneSerializer::load(*scene, "assets/scenes/main.scene");
+    SceneSerializer::load(*scene);
     selectedId = 0;
     hoveredId = 0;
 }
