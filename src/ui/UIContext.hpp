@@ -44,8 +44,20 @@ public:
     glm::vec2 getMousePosition() const;
     bool isMouseButtonDown(int button) const;
 
+    bool isMouseOverUI() const;
+    bool mouseOverUI = false;
+
     int getFramebufferWidth() const;
     int getFramebufferHeight() const;
+
+    void drawTexturedRect(
+        const glm::vec2& pos,
+        const glm::vec2& size,
+        const glm::vec4& color,
+        GLuint texture,
+        const glm::vec2& uvMin,
+        const glm::vec2& uvMax
+    );
 
 private:
     void createShader();

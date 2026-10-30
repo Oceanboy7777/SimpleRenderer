@@ -1,9 +1,10 @@
 #include "Button.hpp"
 #include "UIContext.hpp"
+#include "Font.hpp"
 
 Button::Button()
 {
-    size = { 120.0f, 32.0f };
+    size = { 140.0f, 32.0f };
 }
 
 void Button::setLabel(const std::string& text) { label = text; }
@@ -21,21 +22,29 @@ void Button::draw(UIContext& ctx)
     if (pressed)      color = pressedColor;
     else if (hovered) color = hoveredColor;
 
-    ctx.drawRect(position, size, color);
+    const glm::vec2 worldPos = getWorldPosition();
+    ctx.drawRect(worldPos, size, color);
 
-    // Text will come later – for now just the colored rectangle
+    // Draw label centered
+    if (!label.empty())
+    {
+        float textW = Font::getTextWidth(label, 1.5f);
+        float textH = Font::getLineHeight(1.5f);
+        glm::vec2 textPos = worldPos + glm::vec2(
+            (size.x - textW) * 0.5f,
+            (size.y - textH) * 0.5f
+        );
+        Font::draw(ctx, textPos, label, glm::vec4(1.0f), 1.5f);
+    }
+
     Widget::draw(ctx);
 }
 
-bool Button::onMouseButton(int button, int action, const glm::vec2& mousePos)
+bool Button::onMouseButton(int button, int action, const glm::vec2& worldMousePos)
 {
     if (!visible || !enabled) return false;
 
-    const bool inside =
-        mousePos.x >= position.x &&
-        mousePos.x <= position.x + size.x &&
-        mousePos.y >= position.y &&
-        mousePos.y <= position.y + size.y;
+    const bool inside = containsPoint(worldMousePos);
 
     if (button == GLFW_MOUSE_BUTTON_LEFT)
     {
@@ -47,13 +56,11 @@ bool Button::onMouseButton(int button, int action, const glm::vec2& mousePos)
         else if (action == GLFW_RELEASE)
         {
             if (pressed && inside && onClick)
-            {
                 onClick();
-            }
             pressed = false;
             return inside;
         }
     }
 
-    return Widget::onMouseButton(button, action, mousePos);
+    return Widget::onMouseButton(button, action, worldMousePos);
 }

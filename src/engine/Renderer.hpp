@@ -11,6 +11,7 @@
 #include <glad/gl.h>
 
 #include <memory>
+#include <cstdint>
 
 class Renderer
 {
@@ -27,7 +28,8 @@ public:
         const Scene& scene,
         const Camera& camera,
         int viewportWidth,
-        int viewportHeight
+        int viewportHeight,
+        std::uint64_t selectedId = 0
     );
 
 private:

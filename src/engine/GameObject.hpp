@@ -37,6 +37,8 @@ public:
 
     void update(float deltaTime);
 
+    void setColor(const glm::vec3& color);
+
     std::uint64_t getId() const;
     const std::string& getName() const;
 

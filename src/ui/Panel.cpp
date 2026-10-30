@@ -14,22 +14,19 @@ void Panel::draw(UIContext& ctx)
 {
     if (!visible) return;
 
-    // Background
-    ctx.drawRect(position, size, backgroundColor);
+    const glm::vec2 worldPos = getWorldPosition();
 
-    // Simple border (4 thin rectangles)
+    // Background
+    ctx.drawRect(worldPos, size, backgroundColor);
+
+    // Border
     if (borderThickness > 0.0f)
     {
-        // Top
-        ctx.drawRect(position, { size.x, borderThickness }, borderColor);
-        // Bottom
-        ctx.drawRect({ position.x, position.y + size.y - borderThickness }, { size.x, borderThickness }, borderColor);
-        // Left
-        ctx.drawRect(position, { borderThickness, size.y }, borderColor);
-        // Right
-        ctx.drawRect({ position.x + size.x - borderThickness, position.y }, { borderThickness, size.y }, borderColor);
+        ctx.drawRect(worldPos, { size.x, borderThickness }, borderColor);
+        ctx.drawRect({ worldPos.x, worldPos.y + size.y - borderThickness }, { size.x, borderThickness }, borderColor);
+        ctx.drawRect(worldPos, { borderThickness, size.y }, borderColor);
+        ctx.drawRect({ worldPos.x + size.x - borderThickness, worldPos.y }, { borderThickness, size.y }, borderColor);
     }
 
-    // Draw children
     Widget::draw(ctx);
 }

@@ -568,7 +568,8 @@ void Renderer::render(
     const Scene& scene,
     const Camera& camera,
     int viewportWidth,
-    int viewportHeight
+    int viewportHeight,
+    std::uint64_t selectedId   // ← must be here
 )
 {
     if (viewportWidth <= 0 || viewportHeight <= 0)
@@ -664,4 +665,33 @@ void Renderer::render(
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, 0);
     glActiveTexture(GL_TEXTURE0);
-}
+
+    // ===== Selection outline (Edit mode) =====
+    if (selectedId != 0)
+    {
+        const GameObject* selected = scene.findObjectById(selectedId);
+        if (selected != nullptr)
+        {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            glLineWidth(2.5f);
+            glDisable(GL_DEPTH_TEST);
+
+            const glm::mat4 model = scene.getWorldMatrix(selected->getId());
+            shader.setMatrix4("model", glm::value_ptr(model));
+            shader.setVector3("objectColor", 1.0f, 0.85f, 0.2f);
+            shader.setVector3("materialTint", 1.0f, 1.0f, 1.0f);
+            defaultMaterial.bind();
+
+            if (selected->getMeshType() == MeshType::Plane)
+                planeMesh.draw();
+            else if (selected->getMeshType() == MeshType::ImportedModel && importedMesh)
+                importedMesh->draw();
+            else
+                cubeMesh.draw();
+
+            glEnable(GL_DEPTH_TEST);
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            glLineWidth(1.0f);
+        }
+    }
+} // ← this closes Renderer::render

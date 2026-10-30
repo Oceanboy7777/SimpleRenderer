@@ -33,6 +33,11 @@ void GameObject::update(float deltaTime)
     );
 }
 
+void GameObject::setColor(const glm::vec3& c)
+{
+    color = c;
+}
+
 std::uint64_t GameObject::getId() const
 {
     return id;

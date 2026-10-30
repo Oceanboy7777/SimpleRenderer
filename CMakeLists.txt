@@ -90,14 +90,22 @@ add_executable(SimpleRenderer
     src/engine/Renderer.cpp
     src/engine/Shader.cpp
 
-    # UI system
+    # UI
     src/ui/UIContext.cpp
     src/ui/Widget.cpp
     src/ui/Panel.cpp
     src/ui/Button.cpp
+    src/ui/Font.cpp
+    src/ui/Label.cpp
+
+    # Editor
+    src/editor/HierarchyPanel.cpp
+    src/editor/InspectorPanel.cpp
+    src/engine/SceneSerializer.cpp
 )
 
 target_include_directories(SimpleRenderer PRIVATE
+    "${CMAKE_SOURCE_DIR}/src"          
     "${stb_SOURCE_DIR}"
 )
 

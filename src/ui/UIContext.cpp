@@ -14,28 +14,44 @@ namespace
         #version 330 core
         layout (location = 0) in vec2 aPos;
         layout (location = 1) in vec4 aColor;
+        layout (location = 2) in vec2 aUV;
 
         uniform mat4 projection;
 
         out vec4 vColor;
+        out vec2 vUV;
 
         void main()
         {
             gl_Position = projection * vec4(aPos, 0.0, 1.0);
             vColor = aColor;
+            vUV = aUV;
         }
     )";
 
-    const char* uiFragmentShader = R"(
-        #version 330 core
-        in vec4 vColor;
-        out vec4 FragColor;
+        const char* uiFragmentShader = R"(
+            #version 330 core
+            in vec4 vColor;
+            in vec2 vUV;
 
-        void main()
-        {
-            FragColor = vColor;
-        }
-    )";
+            uniform sampler2D uTexture;
+            uniform bool uUseTexture;
+
+            out vec4 FragColor;
+
+            void main()
+            {
+                if (uUseTexture)
+                {
+                    float alpha = texture(uTexture, vUV).r;
+                    FragColor = vec4(vColor.rgb, vColor.a * alpha);
+                }
+                else
+                {
+                    FragColor = vColor;
+                }
+            }
+        )";
 }
 
 UIContext::UIContext()
@@ -59,15 +75,22 @@ bool UIContext::init()
     glGenVertexArrays(1, &vao);
     glGenBuffers(1, &vbo);
 
+    // After linking the program, in init() after creating VAO/VBO:
+
     glBindVertexArray(vao);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
 
-    // position (2) + color (4)
+    // position (2)
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)0);
 
+    // color (4)
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(2 * sizeof(float)));
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(2 * sizeof(float)));
+
+    // uv (2)
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void*)(6 * sizeof(float)));
 
     glBindVertexArray(0);
 
@@ -151,36 +174,82 @@ void UIContext::drawRect(const glm::vec2& pos, const glm::vec2& size, const glm:
     const float w = size.x;
     const float h = size.y;
 
-    // 6 vertices (2 triangles)
+    // pos.xy, color.rgba, uv.xy
     float vertices[] = {
-        // pos          // color
-        x,     y,       color.r, color.g, color.b, color.a,
-        x + w, y,       color.r, color.g, color.b, color.a,
-        x + w, y + h,   color.r, color.g, color.b, color.a,
+        x,     y,     color.r, color.g, color.b, color.a,  0.0f, 0.0f,
+        x + w, y,     color.r, color.g, color.b, color.a,  1.0f, 0.0f,
+        x + w, y + h, color.r, color.g, color.b, color.a,  1.0f, 1.0f,
 
-        x,     y,       color.r, color.g, color.b, color.a,
-        x + w, y + h,   color.r, color.g, color.b, color.a,
-        x,     y + h,   color.r, color.g, color.b, color.a
+        x,     y,     color.r, color.g, color.b, color.a,  0.0f, 0.0f,
+        x + w, y + h, color.r, color.g, color.b, color.a,  1.0f, 1.0f,
+        x,     y + h, color.r, color.g, color.b, color.a,  0.0f, 1.0f
     };
 
     glUseProgram(shaderProgram);
 
     glm::mat4 projection = glm::ortho(
         0.0f, static_cast<float>(framebufferWidth),
-        static_cast<float>(framebufferHeight), 0.0f,   // top-left origin
+        static_cast<float>(framebufferHeight), 0.0f,
         -1.0f, 1.0f
     );
 
-    GLint loc = glGetUniformLocation(shaderProgram, "projection");
-    glUniformMatrix4fv(loc, 1, GL_FALSE, glm::value_ptr(projection));
+    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+    glUniform1i(glGetUniformLocation(shaderProgram, "uUseTexture"), 0);
 
     glBindVertexArray(vao);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
-
     glDrawArrays(GL_TRIANGLES, 0, 6);
-
     glBindVertexArray(0);
+}
+
+void UIContext::drawTexturedRect(
+    const glm::vec2& pos,
+    const glm::vec2& size,
+    const glm::vec4& color,
+    GLuint texture,
+    const glm::vec2& uvMin,
+    const glm::vec2& uvMax)
+{
+    if (shaderProgram == 0 || texture == 0) return;
+
+    const float x = pos.x;
+    const float y = pos.y;
+    const float w = size.x;
+    const float h = size.y;
+
+    float vertices[] = {
+        x,     y,     color.r, color.g, color.b, color.a,  uvMin.x, uvMin.y,
+        x + w, y,     color.r, color.g, color.b, color.a,  uvMax.x, uvMin.y,
+        x + w, y + h, color.r, color.g, color.b, color.a,  uvMax.x, uvMax.y,
+
+        x,     y,     color.r, color.g, color.b, color.a,  uvMin.x, uvMin.y,
+        x + w, y + h, color.r, color.g, color.b, color.a,  uvMax.x, uvMax.y,
+        x,     y + h, color.r, color.g, color.b, color.a,  uvMin.x, uvMax.y
+    };
+
+    glUseProgram(shaderProgram);
+
+    glm::mat4 projection = glm::ortho(
+        0.0f, static_cast<float>(framebufferWidth),
+        static_cast<float>(framebufferHeight), 0.0f,
+        -1.0f, 1.0f
+    );
+
+    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(projection));
+    glUniform1i(glGetUniformLocation(shaderProgram, "uUseTexture"), 1);
+    glUniform1i(glGetUniformLocation(shaderProgram, "uTexture"), 0);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 void UIContext::drawText(const glm::vec2& /*pos*/, const std::string& /*text*/, const glm::vec4& /*color*/)
@@ -204,13 +273,18 @@ bool UIContext::isMouseButtonDown(int button) const
     return mouseButtons[button];
 }
 
+bool UIContext::isMouseOverUI() const
+{
+    return mouseOverUI;
+}
+
 int UIContext::getFramebufferWidth() const { return framebufferWidth; }
 int UIContext::getFramebufferHeight() const { return framebufferHeight; }
 
 void UIContext::onMouseMove(double x, double y)
 {
     mousePos = { static_cast<float>(x), static_cast<float>(y) };
-    root->onMouseMove(mousePos);
+    mouseOverUI = root->onMouseMove(mousePos);
 }
 
 void UIContext::onMouseButton(int button, int action, int /*mods*/)
