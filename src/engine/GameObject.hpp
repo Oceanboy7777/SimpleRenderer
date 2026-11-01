@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "Transform.hpp"
@@ -41,7 +40,6 @@ public:
 
     std::uint64_t getId() const;
     const std::string& getName() const;
-
     void setName(const std::string& name);
 
     Transform& getTransform();
@@ -54,12 +52,18 @@ public:
     glm::vec3 getColor() const;
 
     MeshType getMeshType() const;
+    void setMeshType(MeshType type);
 
     MaterialType getMaterialType() const;
     void setMaterialType(MaterialType materialType);
 
     std::uint64_t getParentId() const;
     void setParentId(std::uint64_t parentId);
+
+    // Custom mesh file (.obj). Empty = use built-in MeshType.
+    const std::string& getMeshPath() const;
+    void setMeshPath(const std::string& path);
+    void clearMeshPath();
 
 private:
     std::uint64_t id;
@@ -74,4 +78,6 @@ private:
     MaterialType materialType;
 
     std::uint64_t parentId;
+
+    std::string meshPath;
 };

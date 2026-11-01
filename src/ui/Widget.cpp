@@ -57,29 +57,35 @@ void Widget::draw(UIContext& ctx)
         child->draw(ctx);
 }
 
-bool Widget::onMouseMove(const glm::vec2& worldMousePos)
-{
-    if (!visible || !enabled) return false;
-
-    hovered = containsPoint(worldMousePos);
-
-    // Front-to-back
-    for (auto it = children.rbegin(); it != children.rend(); ++it)
-    {
-        if ((*it)->onMouseMove(worldMousePos))
-            return true;
-    }
-    return hovered;
-}
-
 bool Widget::onMouseButton(int button, int action, const glm::vec2& worldMousePos)
 {
-    if (!visible || !enabled) return false;
+    if (!visible || !enabled)
+        return false;
 
-    for (auto it = children.rbegin(); it != children.rend(); ++it)
+    // Top-most child first (last in vector is drawn on top)
+    for (int i = static_cast<int>(children.size()) - 1; i >= 0; --i)
     {
-        if ((*it)->onMouseButton(button, action, worldMousePos))
+        if (children[i]->onMouseButton(button, action, worldMousePos))
             return true;
     }
+
+    if (containsPoint(worldMousePos))
+    {
+        // optional: handle self
+        return false; // or true if this widget consumes clicks on empty background
+    }
     return false;
+}
+
+bool Widget::onMouseMove(const glm::vec2& worldMousePos)
+{
+    if (!visible)
+        return false;
+
+    for (int i = static_cast<int>(children.size()) - 1; i >= 0; --i)
+    {
+        if (children[i]->onMouseMove(worldMousePos))
+            return true;
+    }
+    return containsPoint(worldMousePos);
 }

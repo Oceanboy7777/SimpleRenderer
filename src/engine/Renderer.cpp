@@ -1,9 +1,9 @@
 
 #include "Renderer.hpp"
+#include "editor/GizmoMode.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
-
 #include <algorithm>
 #include <iostream>
 #include <memory>
@@ -487,7 +487,7 @@ void Renderer::renderShadowPass(const Scene& scene)
 
         if (object->getMeshType() == MeshType::Plane)
         {
-            planeMesh.draw();
+            drawObjectMesh(*object);
         }
         else if (object->getMeshType() == MeshType::ImportedModel)
         {
@@ -498,7 +498,7 @@ void Renderer::renderShadowPass(const Scene& scene)
         }
         else
         {
-            cubeMesh.draw();
+            drawObjectMesh(*object);;
         }
     }
 
@@ -506,46 +506,45 @@ void Renderer::renderShadowPass(const Scene& scene)
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void Renderer::drawObject(
-    const Scene& scene,
-    const GameObject& object,
-    const Shader& targetShader
-) const
+Mesh* Renderer::getOrLoadMesh(const std::string& path)
 {
-    const glm::mat4 model =
-        scene.getWorldMatrix(object.getId());
+    if (path.empty())
+        return nullptr;
 
-    targetShader.setMatrix4(
-        "model",
-        glm::value_ptr(model)
-    );
+    auto it = meshCache.find(path);
+    if (it != meshCache.end())
+        return it->second.get();
 
-    const glm::vec3 color = object.getColor();
-
-    targetShader.setVector3(
-        "objectColor",
-        color.r,
-        color.g,
-        color.b
-    );
-
-    const Material* material = &defaultMaterial;
-
-    if (object.getMaterialType() == MaterialType::Ground)
+    ObjMeshData data;
+    std::string error;
+    if (!ObjLoader::load(path, data, error))
     {
-        material = &groundMaterial;
+        std::cerr << "[Renderer] Failed to load mesh '" << path << "': " << error << "\n";
+        return nullptr;
     }
 
-    material->bind();
-
-    const glm::vec3 tint = material->getTint();
-
-    targetShader.setVector3(
-        "materialTint",
-        tint.r,
-        tint.g,
-        tint.b
+    auto mesh = std::make_unique<Mesh>(
+        data.vertices.data(),
+        data.vertices.size(),
+        data.indices.data(),
+        data.indices.size()
     );
+
+    Mesh* raw = mesh.get();
+    meshCache.emplace(path, std::move(mesh));
+    return raw;
+}
+
+void Renderer::drawObjectMesh(const GameObject& object)
+{
+    if (!object.getMeshPath().empty())
+    {
+        if (Mesh* custom = getOrLoadMesh(object.getMeshPath()))
+        {
+            custom->draw();
+            return;
+        }
+    }
 
     if (object.getMeshType() == MeshType::Plane)
     {
@@ -554,9 +553,7 @@ void Renderer::drawObject(
     else if (object.getMeshType() == MeshType::ImportedModel)
     {
         if (importedMesh != nullptr)
-        {
             importedMesh->draw();
-        }
     }
     else
     {
@@ -564,13 +561,40 @@ void Renderer::drawObject(
     }
 }
 
+void Renderer::drawObject(
+    const Scene& scene,
+    const GameObject& object,
+    const Shader& targetShader
+)
+{
+    const glm::mat4 model = scene.getWorldMatrix(object.getId());
+
+    targetShader.setMatrix4("model", glm::value_ptr(model));
+
+    const glm::vec3 color = object.getColor();
+    targetShader.setVector3("objectColor", color.r, color.g, color.b);
+
+    const Material* material = &defaultMaterial;
+    if (object.getMaterialType() == MaterialType::Ground)
+        material = &groundMaterial;
+
+    material->bind();
+
+    const glm::vec3 tint = material->getTint();
+    targetShader.setVector3("materialTint", tint.r, tint.g, tint.b);
+
+    drawObjectMesh(object);
+}
+
 void Renderer::render(
     const Scene& scene,
     const Camera& camera,
     int viewportWidth,
     int viewportHeight,
-    std::uint64_t selectedId   // ← must be here
+    std::uint64_t selectedId,
+    GizmoMode gizmoMode
 )
+{
 {
     if (viewportWidth <= 0 || viewportHeight <= 0)
     {
@@ -666,6 +690,25 @@ void Renderer::render(
     glBindTexture(GL_TEXTURE_2D, 0);
     glActiveTexture(GL_TEXTURE0);
 
+    // ===== Ground grid + axes at origin =====
+    drawGrid(camera, viewportWidth, viewportHeight);
+
+    // ===== Transform gizmo at selected object =====
+    if (selectedId != 0)
+    {
+        const GameObject* selectedForGizmo = scene.findObjectById(selectedId);
+        if (selectedForGizmo != nullptr)
+        {
+            drawGizmo(
+                camera,
+                selectedForGizmo->getPosition(),
+                gizmoMode,
+                viewportWidth,
+                viewportHeight);
+        }
+    }
+
+
     // ===== Selection outline (Edit mode) =====
     if (selectedId != 0)
     {
@@ -695,3 +738,304 @@ void Renderer::render(
         }
     }
 } // ← this closes Renderer::render
+
+void Renderer::drawGrid(const Camera& camera, int width, int height)
+{
+    // If you don't have a line shader yet, skip GPU lines and
+    // use a large translucent plane as a ground reference:
+    // (Place this AFTER main scene, with blending ON)
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+
+    shader.use();
+    // set view/projection same as main pass
+
+    glm::mat4 model(1.0f);
+    model = glm::translate(model, glm::vec3(0.0f, 0.0f, 0.0f));
+    model = glm::scale(model, glm::vec3(200.0f, 1.0f, 200.0f));
+    shader.setMatrix4("model", glm::value_ptr(model));
+    shader.setVector3("objectColor", 0.35f, 0.38f, 0.45f);
+    shader.setVector3("materialTint", 1.0f, 1.0f, 1.0f);
+
+    // Force alpha in fragment path if your shader supports object alpha;
+    // otherwise the plane will be opaque — then use a dedicated grid shader later.
+
+    planeMesh.draw();
+
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
+
+void Renderer::drawGrid(
+    const Camera& camera,
+    int viewportWidth,
+    int viewportHeight)
+{
+    if (!shader.isValid() || !planeMesh.isValid())
+        return;
+
+    if (viewportWidth <= 0 || viewportHeight <= 0)
+        return;
+
+    const float aspect =
+        static_cast<float>(viewportWidth) /
+        static_cast<float>(std::max(viewportHeight, 1));
+
+    const glm::mat4 projection = glm::perspective(
+        glm::radians(camera.getFieldOfView()),
+        aspect,
+        0.1f,
+        500.0f
+    );
+    const glm::mat4 view = camera.getViewMatrix();
+
+    shader.use();
+    shader.setMatrix4("projection", glm::value_ptr(projection));
+    shader.setMatrix4("view", glm::value_ptr(view));
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+
+    // Large ground plane at y = 0 (alpha depends on shader;
+    // objectColor used as tint — ~0.3 look via dark color)
+    glm::mat4 model(1.0f);
+    model = glm::scale(model, glm::vec3(250.0f, 1.0f, 250.0f));
+    shader.setMatrix4("model", glm::value_ptr(model));
+    shader.setVector3("objectColor", 0.25f, 0.28f, 0.32f);
+    shader.setVector3("materialTint", 1.0f, 1.0f, 1.0f);
+    defaultMaterial.bind();
+    planeMesh.draw();
+
+    // Center cross: X (red) and Z (blue) thin cubes on the ground
+    auto axisBar = [&](const glm::vec3& scale, const glm::vec3& color)
+        {
+            glm::mat4 m(1.0f);
+            m = glm::scale(m, scale);
+            shader.setMatrix4("model", glm::value_ptr(m));
+            shader.setVector3("objectColor", color.r, color.g, color.b);
+            cubeMesh.draw();
+        };
+
+    // X axis line along X
+    axisBar(glm::vec3(250.0f, 0.02f, 0.02f), glm::vec3(0.8f, 0.2f, 0.2f));
+    // Z axis line along Z
+    axisBar(glm::vec3(0.02f, 0.02f, 250.0f), glm::vec3(0.2f, 0.4f, 0.9f));
+    // Origin marker
+    axisBar(glm::vec3(0.08f, 0.08f, 0.08f), glm::vec3(0.9f, 0.9f, 0.3f));
+
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
+
+void Renderer::drawGizmo(
+    const Camera& camera,
+    const glm::vec3& position,
+    GizmoMode mode,
+    int viewportWidth,
+    int viewportHeight)
+{
+    if (!shader.isValid() || !cubeMesh.isValid())
+        return;
+
+    if (viewportWidth <= 0 || viewportHeight <= 0)
+        return;
+
+    const float aspect =
+        static_cast<float>(viewportWidth) /
+        static_cast<float>(std::max(viewportHeight, 1));
+
+    const glm::mat4 projection = glm::perspective(
+        glm::radians(camera.getFieldOfView()),
+        aspect,
+        0.1f,
+        500.0f
+    );
+    const glm::mat4 view = camera.getViewMatrix();
+
+    shader.use();
+    shader.setMatrix4("projection", glm::value_ptr(projection));
+    shader.setMatrix4("view", glm::value_ptr(view));
+
+    glDisable(GL_DEPTH_TEST);
+
+    const float axisLen = 1.2f;
+    const float axisThick = 0.04f;
+    const float handle = 0.12f;
+
+    auto drawArm = [&](const glm::vec3& offset, const glm::vec3& scale, const glm::vec3& color)
+        {
+            glm::mat4 m(1.0f);
+            m = glm::translate(m, position + offset);
+            m = glm::scale(m, scale);
+            shader.setMatrix4("model", glm::value_ptr(m));
+            shader.setVector3("objectColor", color.r, color.g, color.b);
+            shader.setVector3("materialTint", 1.0f, 1.0f, 1.0f);
+            defaultMaterial.bind();
+            cubeMesh.draw();
+        };
+
+    // Always show RGB axes at selection
+    drawArm({ axisLen * 0.5f, 0, 0 }, { axisLen, axisThick, axisThick }, { 1, 0.2f, 0.2f });
+    drawArm({ 0, axisLen * 0.5f, 0 }, { axisThick, axisLen, axisThick }, { 0.2f, 1, 0.2f });
+    drawArm({ 0, 0, axisLen * 0.5f }, { axisThick, axisThick, axisLen }, { 0.2f, 0.4f, 1 });
+
+    if (mode == GizmoMode::Translate)
+    {
+        // Arrow tips
+        drawArm({ axisLen, 0, 0 }, { handle, handle, handle }, { 1, 0.3f, 0.3f });
+        drawArm({ 0, axisLen, 0 }, { handle, handle, handle }, { 0.3f, 1, 0.3f });
+        drawArm({ 0, 0, axisLen }, { handle, handle, handle }, { 0.3f, 0.5f, 1 });
+    }
+    else if (mode == GizmoMode::Scale)
+    {
+        // Cube handles at ends
+        drawArm({ axisLen, 0, 0 }, { handle, handle, handle }, { 1, 0.8f, 0.2f });
+        drawArm({ 0, axisLen, 0 }, { handle, handle, handle }, { 1, 0.8f, 0.2f });
+        drawArm({ 0, 0, axisLen }, { handle, handle, handle }, { 1, 0.8f, 0.2f });
+    }
+    else // Rotate — rings approximated as thicker tips
+    {
+        drawArm({ axisLen, 0, 0 }, { handle * 1.2f, handle * 0.4f, handle * 1.2f }, { 1, 0.4f, 0.4f });
+        drawArm({ 0, axisLen, 0 }, { handle * 1.2f, handle * 0.4f, handle * 1.2f }, { 0.4f, 1, 0.4f });
+        drawArm({ 0, 0, axisLen }, { handle * 1.2f, handle * 0.4f, handle * 1.2f }, { 0.4f, 0.5f, 1 });
+    }
+
+    // Center
+    drawArm({ 0, 0, 0 }, { handle, handle, handle }, { 0.95f, 0.95f, 0.95f });
+
+    glEnable(GL_DEPTH_TEST);
+}
+
+void Renderer::drawGrid(
+    const Camera& camera,
+    int viewportWidth,
+    int viewportHeight)
+{
+    if (!shader.isValid() || !planeMesh.isValid() || !cubeMesh.isValid())
+        return;
+
+    if (viewportWidth <= 0 || viewportHeight <= 0)
+        return;
+
+    const float aspect =
+        static_cast<float>(viewportWidth) /
+        static_cast<float>(std::max(viewportHeight, 1));
+
+    const glm::mat4 projection = glm::perspective(
+        glm::radians(camera.getFieldOfView()),
+        aspect,
+        0.1f,
+        500.0f);
+
+    const glm::mat4 view = camera.getViewMatrix();
+
+    shader.use();
+    shader.setMatrix4("projection", glm::value_ptr(projection));
+    shader.setMatrix4("view", glm::value_ptr(view));
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+
+    glm::mat4 model(1.0f);
+    model = glm::scale(model, glm::vec3(250.0f, 1.0f, 250.0f));
+    shader.setMatrix4("model", glm::value_ptr(model));
+    shader.setVector3("objectColor", 0.25f, 0.28f, 0.32f);
+    shader.setVector3("materialTint", 1.0f, 1.0f, 1.0f);
+    defaultMaterial.bind();
+    planeMesh.draw();
+
+    auto axisBar = [&](const glm::vec3& scale, const glm::vec3& color)
+        {
+            glm::mat4 m(1.0f);
+            m = glm::scale(m, scale);
+            shader.setMatrix4("model", glm::value_ptr(m));
+            shader.setVector3("objectColor", color.r, color.g, color.b);
+            cubeMesh.draw();
+        };
+
+    axisBar(glm::vec3(250.0f, 0.02f, 0.02f), glm::vec3(0.8f, 0.2f, 0.2f));
+    axisBar(glm::vec3(0.02f, 0.02f, 250.0f), glm::vec3(0.2f, 0.4f, 0.9f));
+    axisBar(glm::vec3(0.08f, 0.08f, 0.08f), glm::vec3(0.9f, 0.9f, 0.3f));
+
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
+
+void Renderer::drawGizmo(
+    const Camera& camera,
+    const glm::vec3& position,
+    GizmoMode mode,
+    int viewportWidth,
+    int viewportHeight)
+{
+    if (!shader.isValid() || !cubeMesh.isValid())
+        return;
+
+    if (viewportWidth <= 0 || viewportHeight <= 0)
+        return;
+
+    const float aspect =
+        static_cast<float>(viewportWidth) /
+        static_cast<float>(std::max(viewportHeight, 1));
+
+    const glm::mat4 projection = glm::perspective(
+        glm::radians(camera.getFieldOfView()),
+        aspect,
+        0.1f,
+        500.0f);
+
+    const glm::mat4 view = camera.getViewMatrix();
+
+    shader.use();
+    shader.setMatrix4("projection", glm::value_ptr(projection));
+    shader.setMatrix4("view", glm::value_ptr(view));
+
+    glDisable(GL_DEPTH_TEST);
+
+    const float axisLen = 1.2f;
+    const float axisThick = 0.04f;
+    const float handle = 0.12f;
+
+    auto drawArm = [&](const glm::vec3& offset, const glm::vec3& scale, const glm::vec3& color)
+        {
+            glm::mat4 m(1.0f);
+            m = glm::translate(m, position + offset);
+            m = glm::scale(m, scale);
+            shader.setMatrix4("model", glm::value_ptr(m));
+            shader.setVector3("objectColor", color.r, color.g, color.b);
+            shader.setVector3("materialTint", 1.0f, 1.0f, 1.0f);
+            defaultMaterial.bind();
+            cubeMesh.draw();
+        };
+
+    drawArm({ axisLen * 0.5f, 0.0f, 0.0f }, { axisLen, axisThick, axisThick }, { 1.0f, 0.2f, 0.2f });
+    drawArm({ 0.0f, axisLen * 0.5f, 0.0f }, { axisThick, axisLen, axisThick }, { 0.2f, 1.0f, 0.2f });
+    drawArm({ 0.0f, 0.0f, axisLen * 0.5f }, { axisThick, axisThick, axisLen }, { 0.2f, 0.4f, 1.0f });
+
+    if (mode == GizmoMode::Translate)
+    {
+        drawArm({ axisLen, 0.0f, 0.0f }, { handle, handle, handle }, { 1.0f, 0.3f, 0.3f });
+        drawArm({ 0.0f, axisLen, 0.0f }, { handle, handle, handle }, { 0.3f, 1.0f, 0.3f });
+        drawArm({ 0.0f, 0.0f, axisLen }, { handle, handle, handle }, { 0.3f, 0.5f, 1.0f });
+    }
+    else if (mode == GizmoMode::Scale)
+    {
+        drawArm({ axisLen, 0.0f, 0.0f }, { handle, handle, handle }, { 1.0f, 0.8f, 0.2f });
+        drawArm({ 0.0f, axisLen, 0.0f }, { handle, handle, handle }, { 1.0f, 0.8f, 0.2f });
+        drawArm({ 0.0f, 0.0f, axisLen }, { handle, handle, handle }, { 1.0f, 0.8f, 0.2f });
+    }
+    else
+    {
+        drawArm({ axisLen, 0.0f, 0.0f }, { handle * 1.2f, handle * 0.4f, handle * 1.2f }, { 1.0f, 0.4f, 0.4f });
+        drawArm({ 0.0f, axisLen, 0.0f }, { handle * 1.2f, handle * 0.4f, handle * 1.2f }, { 0.4f, 1.0f, 0.4f });
+        drawArm({ 0.0f, 0.0f, axisLen }, { handle * 1.2f, handle * 0.4f, handle * 1.2f }, { 0.4f, 0.5f, 1.0f });
+    }
+
+    drawArm({ 0.0f, 0.0f, 0.0f }, { handle, handle, handle }, { 0.95f, 0.95f, 0.95f });
+
+    glEnable(GL_DEPTH_TEST);
+}

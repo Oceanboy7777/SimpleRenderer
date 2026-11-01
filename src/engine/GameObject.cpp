@@ -1,4 +1,3 @@
-
 #include "GameObject.hpp"
 
 #include <glm/glm.hpp>
@@ -20,7 +19,8 @@ GameObject::GameObject(
     rotationSpeed(rotationSpeed),
     meshType(meshType),
     materialType(materialType),
-    parentId(0)
+    parentId(0),
+    meshPath()
 {
     transform.setPosition(position);
     transform.setScale(scale);
@@ -28,9 +28,7 @@ GameObject::GameObject(
 
 void GameObject::update(float deltaTime)
 {
-    transform.rotate(
-        glm::vec3(0.0f, rotationSpeed * deltaTime, 0.0f)
-    );
+    transform.rotate(glm::vec3(0.0f, rotationSpeed * deltaTime, 0.0f));
 }
 
 void GameObject::setColor(const glm::vec3& c)
@@ -88,6 +86,11 @@ MeshType GameObject::getMeshType() const
     return meshType;
 }
 
+void GameObject::setMeshType(MeshType type)
+{
+    meshType = type;
+}
+
 MaterialType GameObject::getMaterialType() const
 {
     return materialType;
@@ -106,4 +109,19 @@ std::uint64_t GameObject::getParentId() const
 void GameObject::setParentId(std::uint64_t newParentId)
 {
     parentId = newParentId;
+}
+
+const std::string& GameObject::getMeshPath() const
+{
+    return meshPath;
+}
+
+void GameObject::setMeshPath(const std::string& path)
+{
+    meshPath = path;
+}
+
+void GameObject::clearMeshPath()
+{
+    meshPath.clear();
 }

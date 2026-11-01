@@ -1,65 +1,200 @@
 #include "HierarchyPanel.hpp"
+#include "SceneDialog.hpp"
 #include "ui/UIContext.hpp"
 #include "ui/Font.hpp"
 #include "engine/SceneSerializer.hpp"
+#include "engine/ProjectManager.hpp"
+#include "engine/GameObject.hpp"
 
+#include <GLFW/glfw3.h>
 #include <iostream>
+#include <algorithm>
+#include <cctype>
+
+namespace
+{
+    constexpr float kPadX = 10.0f;
+    constexpr float kPadY = 8.0f;
+    constexpr float kRowH = 30.0f;
+
+    const char* categoryName(int i)
+    {
+        switch (i)
+        {
+        case 0: return "Gamespace";
+        case 1: return "User Interface";
+        case 2: return "Rendering";
+        case 3: return "Sound Service";
+        case 4: return "Physics Service";
+        case 5: return "Script Service";
+        default: return "Unknown";
+        }
+    }
+}
 
 HierarchyPanel::HierarchyPanel()
 {
     setPosition({ 10.0f, 10.0f });
-    setSize({ 260.0f, 560.0f });
+    setSize({ 280.0f, 520.0f });
     setBackgroundColor({ 0.12f, 0.13f, 0.16f, 0.95f });
+    initCategories();
+
+    searchBox.setPlaceholder("Search...");
+    searchBox.setSize({ 256.0f, 24.0f });
+    searchBox.setOnChanged([this](const std::string& text)
+        {
+            searchFilter = text;
+        });
+}
+
+void HierarchyPanel::initCategories()
+{
+    for (int i = 0; i < static_cast<int>(Category::Count); ++i)
+    {
+        categories[i].name = categoryName(i);
+        categories[i].expanded = (i == 0);
+    }
 }
 
 void HierarchyPanel::setScene(Scene* s) { scene = s; }
+void HierarchyPanel::setSceneDialog(SceneDialog* dialog) { sceneDialog = dialog; }
+void HierarchyPanel::setCurrentScenePath(const std::filesystem::path& path) { currentScenePath = path; }
+std::filesystem::path HierarchyPanel::getCurrentScenePath() const { return currentScenePath; }
 void HierarchyPanel::setSelectedId(std::uint64_t id) { selectedId = id; }
 std::uint64_t HierarchyPanel::getSelectedId() const { return selectedId; }
 
 void HierarchyPanel::update(UIContext& ctx, float deltaTime)
 {
     Panel::update(ctx, deltaTime);
+    listScroll.update(ctx, deltaTime);
 }
 
-void HierarchyPanel::createCube()
+void HierarchyPanel::createStaticMesh(MeshType type, const std::string& name)
 {
     if (!scene) return;
 
     static int counter = 1;
-    float offset = static_cast<float>(counter) * 0.6f;
+    const float offset = static_cast<float>(counter) * 0.55f;
 
     GameObject& obj = scene->createObject(
-        "Cube " + std::to_string(counter),
-        glm::vec3(offset, 0.5f, offset * 0.3f),
+        name + " " + std::to_string(counter),
+        glm::vec3(offset, 0.5f, offset * 0.25f),
         glm::vec3(0.7f),
-        glm::vec3(0.4f + (counter % 5) * 0.1f, 0.6f, 0.9f - (counter % 4) * 0.1f),
+        glm::vec3(0.45f + (counter % 5) * 0.08f, 0.65f, 0.85f),
         0.0f,
-        MeshType::Cube,
-        MaterialType::Default
-    );
+        type,
+        MaterialType::Default);
 
     selectedId = obj.getId();
     ++counter;
-    std::cout << "Created object ID: " << selectedId << "\n";
+    createMenuOpen = false;
+    staticMeshMenuOpen = false;
+    createMenuCategory = -1;
 }
 
 void HierarchyPanel::deleteSelected()
 {
     if (!scene || selectedId == 0) return;
-
     GameObject* obj = scene->findObjectById(selectedId);
-    if (obj && obj->getName() == "Ground")
-    {
-        std::cout << "Cannot delete Ground\n";
-        return;
-    }
+    if (obj && obj->getName() == "Ground") return;
 
     if (scene->removeObject(selectedId))
     {
-        std::cout << "Deleted object ID: " << selectedId << "\n";
+        if (renaming && renameId == selectedId) cancelRename();
         selectedId = 0;
         hoveredId = 0;
     }
+}
+
+void HierarchyPanel::saveScene()
+{
+    if (!scene || !sceneDialog) return;
+    sceneDialog->openSave(currentScenePath);
+}
+
+void HierarchyPanel::loadScene()
+{
+    if (!scene || !sceneDialog) return;
+    sceneDialog->openLoad();
+}
+
+void HierarchyPanel::beginRename()
+{
+    if (!scene || selectedId == 0) return;
+    GameObject* obj = scene->findObjectById(selectedId);
+    if (!obj) return;
+    renaming = true;
+    renameId = selectedId;
+    renameBuffer = obj->getName();
+}
+
+void HierarchyPanel::commitRename()
+{
+    if (!renaming || !scene) return;
+    GameObject* obj = scene->findObjectById(renameId);
+    if (obj && !renameBuffer.empty())
+        obj->setName(renameBuffer);
+    renaming = false;
+    renameId = 0;
+    renameBuffer.clear();
+}
+
+void HierarchyPanel::cancelRename()
+{
+    renaming = false;
+    renameId = 0;
+    renameBuffer.clear();
+}
+
+void HierarchyPanel::onKey(int key, int action)
+{
+    searchBox.onKey(key, action);
+
+    if (action != GLFW_PRESS && action != GLFW_REPEAT)
+        return;
+
+    if (searchBox.isFocused())
+        return;
+
+    if (renaming)
+    {
+        if (key == GLFW_KEY_ENTER)
+            commitRename();
+        else if (key == GLFW_KEY_ESCAPE)
+            cancelRename();
+        else if (key == GLFW_KEY_BACKSPACE && !renameBuffer.empty())
+            renameBuffer.pop_back();
+        return;
+    }
+
+    if (key == GLFW_KEY_F2)
+        beginRename();
+    else if (key == GLFW_KEY_DELETE)
+        deleteSelected();
+}
+
+void HierarchyPanel::onChar(unsigned int codepoint)
+{
+    searchBox.onChar(codepoint);
+
+    if (searchBox.isFocused())
+        return;
+
+    if (!renaming)
+        return;
+
+    if (codepoint < 32 || codepoint > 126)
+        return;
+
+    if (renameBuffer.size() >= 48)
+        return;
+
+    renameBuffer.push_back(static_cast<char>(codepoint));
+}
+
+void HierarchyPanel::onScroll(float yOffset)
+{
+    listScroll.onScroll(yOffset);
 }
 
 void HierarchyPanel::draw(UIContext& ctx)
@@ -67,148 +202,315 @@ void HierarchyPanel::draw(UIContext& ctx)
     if (!visible) return;
 
     itemRects.clear();
-    actionButtons.clear();
-
+    actionHits.clear();
     Panel::draw(ctx);
-    if (!scene) return;
 
-    const glm::vec2 worldPos = getWorldPosition();
+    const glm::vec2 wp = getWorldPosition();
 
-    Font::draw(ctx, worldPos + glm::vec2(14.0f, 14.0f),
-        "Hierarchy", glm::vec4(0.85f, 0.9f, 1.0f, 1.0f), 1.8f);
+    Font::draw(ctx, wp + glm::vec2(kPadX, 10.0f),
+        "Hierarchy", glm::vec4(0.85f, 0.9f, 1.0f, 1.0f), 1.7f);
 
-    const auto& objects = scene->getObjects();
-    float y = 48.0f;
+    std::string sceneLabel = currentScenePath.empty()
+        ? "Scene: (none)"
+        : "Scene: " + currentScenePath.filename().string();
+    Font::draw(ctx, wp + glm::vec2(kPadX, 32.0f),
+        sceneLabel, glm::vec4(0.55f, 0.6f, 0.7f, 1.0f), 1.1f);
 
-    for (const auto& obj : objects)
+    // Search
+    searchBox.setPosition(wp + glm::vec2(12.0f, 52.0f));
+    searchBox.setSize({ size.x - 24.0f, 24.0f });
+    searchBox.draw(ctx);
+
+    // Save / Load / Del
+    const float toolY = 84.0f;
+    auto toolBtn = [&](float x, const char* label, ActionHit::Type type, glm::vec4 col)
+        {
+            glm::vec2 p = wp + glm::vec2(x, toolY);
+            glm::vec2 s = { 80.0f, 26.0f };
+            ctx.drawRect(p, s, col);
+            float tw = Font::getTextWidth(label, 1.25f);
+            Font::draw(ctx, p + glm::vec2((s.x - tw) * 0.5f, 6.0f), label, glm::vec4(1.0f), 1.25f);
+            actionHits.push_back({ type, p, s, -1 });
+        };
+    toolBtn(12.0f, "Save", ActionHit::Type::SaveScene, { 0.25f, 0.35f, 0.55f, 1.0f });
+    toolBtn(100.0f, "Load", ActionHit::Type::LoadScene, { 0.35f, 0.30f, 0.50f, 1.0f });
+    toolBtn(188.0f, "Del", ActionHit::Type::Delete, { 0.50f, 0.20f, 0.20f, 1.0f });
+
+    const float listTop = 120.0f;
+    const float listH = size.y - listTop - 8.0f;
+    listScroll.setPosition(wp + glm::vec2(8.0f, listTop));
+    listScroll.setSize({ size.x - 16.0f, listH });
+
+    float localY = 4.0f;
+    const float ly = listScroll.getWorldPosition().y;
+    const float lb = ly + listScroll.getSize().y;
+
+    for (int c = 0; c < static_cast<int>(Category::Count); ++c)
     {
-        const bool isSelected = (obj->getId() == selectedId);
-        const bool isHovered = (obj->getId() == hoveredId);
+        const float worldY = listScroll.contentToWorldY(localY);
+        glm::vec2 rowPos = { listScroll.getWorldPosition().x + 4.0f, worldY };
+        glm::vec2 rowSize = { listScroll.getSize().x - 8.0f, kRowH };
 
-        glm::vec2 itemPos = worldPos + glm::vec2(10.0f, y);
-        glm::vec2 itemSize = { size.x - 20.0f, 28.0f };
-        itemRects.push_back({ obj->getId(), itemPos, itemSize });
+        if (worldY + kRowH >= ly && worldY <= lb)
+        {
+            ctx.drawRect(rowPos, rowSize, glm::vec4(0.18f, 0.20f, 0.26f, 0.95f));
+            const char* arrow = categories[c].expanded ? "v " : "> ";
+            Font::draw(ctx, rowPos + glm::vec2(kPadX, kPadY),
+                std::string(arrow) + categories[c].name,
+                glm::vec4(0.85f, 0.88f, 1.0f, 1.0f), 1.3f);
 
-        if (isSelected)
-            ctx.drawRect(itemPos, itemSize, glm::vec4(0.22f, 0.38f, 0.72f, 0.95f));
-        else if (isHovered)
-            ctx.drawRect(itemPos, itemSize, glm::vec4(0.22f, 0.24f, 0.30f, 0.9f));
+            itemRects.push_back({ 0, rowPos, rowSize, true, c });
+
+            // + button on category
+            glm::vec2 plusSize = { 28.0f, 22.0f };
+            glm::vec2 plusPos = {
+                rowPos.x + rowSize.x - plusSize.x - 6.0f,
+                rowPos.y + (kRowH - plusSize.y) * 0.5f
+            };
+            ctx.drawRect(plusPos, plusSize, glm::vec4(0.20f, 0.45f, 0.30f, 1.0f));
+            Font::draw(ctx, plusPos + glm::vec2(8.0f, 4.0f), "+", glm::vec4(1.0f), 1.4f);
+            actionHits.push_back({ ActionHit::Type::OpenCreateMenu, plusPos, plusSize, c });
+
+            if (createMenuOpen && createMenuCategory == c)
+                lastCreateButtonPos = plusPos;
+        }
+        localY += kRowH + 4.0f;
+
+        if (!categories[c].expanded)
+            continue;
+
+        if (c == static_cast<int>(Category::Gamespace) && scene)
+        {
+            for (const auto& objPtr : scene->getObjects())
+            {
+                const GameObject& obj = *objPtr;
+
+                if (!searchFilter.empty())
+                {
+                    std::string lowerName = obj.getName();
+                    std::string lowerFilter = searchFilter;
+                    for (char& ch : lowerName)
+                        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    for (char& ch : lowerFilter)
+                        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+                    if (lowerName.find(lowerFilter) == std::string::npos)
+                        continue;
+                }
+
+                const float oy = listScroll.contentToWorldY(localY);
+                glm::vec2 oPos = { listScroll.getWorldPosition().x + 16.0f, oy };
+                glm::vec2 oSize = { listScroll.getSize().x - 24.0f, kRowH };
+
+                if (oy + kRowH >= ly && oy <= lb)
+                {
+                    const bool isSelected = (obj.getId() == selectedId);
+                    const bool isHovered = (obj.getId() == hoveredId);
+                    if (isSelected)
+                        ctx.drawRect(oPos, oSize, glm::vec4(0.22f, 0.38f, 0.72f, 0.95f));
+                    else if (isHovered)
+                        ctx.drawRect(oPos, oSize, glm::vec4(0.22f, 0.24f, 0.30f, 0.9f));
+                    else
+                        ctx.drawRect(oPos, oSize, glm::vec4(0.14f, 0.15f, 0.18f, 0.7f));
+
+                    std::string label = obj.getName();
+                    if (renaming && renameId == obj.getId())
+                        label = renameBuffer + "_";
+
+                    Font::draw(ctx, oPos + glm::vec2(kPadX, kPadY), label, glm::vec4(0.95f), 1.25f);
+                    itemRects.push_back({ obj.getId(), oPos, oSize, false, -1 });
+                }
+                localY += kRowH + 4.0f;
+            }
+        }
         else
-            ctx.drawRect(itemPos, itemSize, glm::vec4(0.16f, 0.17f, 0.21f, 0.6f));
-
-        Font::draw(ctx, itemPos + glm::vec2(10.0f, 7.0f),
-            obj->getName(), glm::vec4(0.95f, 0.95f, 0.97f, 1.0f), 1.4f);
-
-        y += 32.0f;
-        if (y > size.y - 90.0f) break;
+        {
+            const float ey = listScroll.contentToWorldY(localY);
+            if (ey + kRowH >= ly && ey <= lb)
+            {
+                Font::draw(ctx,
+                    glm::vec2(listScroll.getWorldPosition().x + 20.0f, ey + kPadY),
+                    "(empty)", glm::vec4(0.45f), 1.15f);
+            }
+            localY += kRowH;
+        }
     }
 
-    // Row 1: + Cube | Delete
-    float btnY = size.y - 78.0f;
-    glm::vec2 btnSize = { 110.0f, 28.0f };
+    listContentHeight = localY + 8.0f;
+    listScroll.setContentHeight(listContentHeight);
+    listScroll.draw(ctx);
 
-    glm::vec2 createPos = worldPos + glm::vec2(15.0f, btnY);
-    ctx.drawRect(createPos, btnSize, glm::vec4(0.20f, 0.45f, 0.30f, 1.0f));
-    Font::draw(ctx, createPos + glm::vec2(22.0f, 6.0f), "+ Cube", glm::vec4(1.0f), 1.4f);
-    actionButtons.push_back({ ActionButton::Type::CreateCube, createPos, btnSize });
+    // Create popup
+    if (createMenuOpen)
+    {
+        glm::vec2 menuPos = lastCreateButtonPos + glm::vec2(0.0f, 28.0f);
+        const bool gamespace = (createMenuCategory == 0);
+        glm::vec2 menuSize = {
+            170.0f,
+            gamespace ? (staticMeshMenuOpen ? 220.0f : 44.0f) : 44.0f
+        };
 
-    glm::vec2 deletePos = worldPos + glm::vec2(135.0f, btnY);
-    ctx.drawRect(deletePos, btnSize, glm::vec4(0.50f, 0.20f, 0.20f, 1.0f));
-    Font::draw(ctx, deletePos + glm::vec2(28.0f, 6.0f), "Delete", glm::vec4(1.0f), 1.4f);
-    actionButtons.push_back({ ActionButton::Type::Delete, deletePos, btnSize });
+        lastCreateMenuPos = menuPos;
+        lastCreateMenuSize = menuSize;
 
-    // Row 2: Save | Load
-    btnY = size.y - 42.0f;
+        ctx.drawRect(menuPos, menuSize, glm::vec4(0.16f, 0.17f, 0.22f, 0.98f));
 
-    glm::vec2 savePos = worldPos + glm::vec2(15.0f, btnY);
-    ctx.drawRect(savePos, btnSize, glm::vec4(0.25f, 0.35f, 0.55f, 1.0f));
-    Font::draw(ctx, savePos + glm::vec2(32.0f, 6.0f), "Save", glm::vec4(1.0f), 1.4f);
-    actionButtons.push_back({ ActionButton::Type::SaveScene, savePos, btnSize });
+        if (!gamespace)
+        {
+            Font::draw(ctx, menuPos + glm::vec2(12.0f, 14.0f),
+                "(nothing yet)", glm::vec4(0.6f), 1.2f);
+        }
+        else
+        {
+            glm::vec2 smPos = menuPos + glm::vec2(8.0f, 8.0f);
+            glm::vec2 smSize = { 154.0f, 28.0f };
+            ctx.drawRect(smPos, smSize, glm::vec4(0.22f, 0.28f, 0.36f, 1.0f));
+            Font::draw(ctx, smPos + glm::vec2(10.0f, 7.0f),
+                staticMeshMenuOpen ? "Static Mesh v" : "Static Mesh >",
+                glm::vec4(1.0f), 1.25f);
+            actionHits.push_back({ ActionHit::Type::ToggleStaticMeshMenu, smPos, smSize, -1 });
 
-    glm::vec2 loadPos = worldPos + glm::vec2(135.0f, btnY);
-    ctx.drawRect(loadPos, btnSize, glm::vec4(0.35f, 0.30f, 0.50f, 1.0f));
-    Font::draw(ctx, loadPos + glm::vec2(32.0f, 6.0f), "Load", glm::vec4(1.0f), 1.4f);
-    actionButtons.push_back({ ActionButton::Type::LoadScene, loadPos, btnSize });
+            if (staticMeshMenuOpen)
+            {
+                struct Opt { const char* label; ActionHit::Type type; };
+                const Opt opts[] = {
+                    { "Cube", ActionHit::Type::CreateStaticCube },
+                    { "Plane", ActionHit::Type::CreateStaticPlane },
+                    { "Pyramid", ActionHit::Type::CreateStaticPyramid },
+                    { "Custom", ActionHit::Type::CreateStaticCustom },
+                    { "Sphere", ActionHit::Type::CreateStaticSphere },
+                    { "Cone", ActionHit::Type::CreateStaticCone },
+                };
+                float my = 42.0f;
+                for (const auto& o : opts)
+                {
+                    glm::vec2 p = menuPos + glm::vec2(12.0f, my);
+                    glm::vec2 s = { 146.0f, 26.0f };
+                    ctx.drawRect(p, s, glm::vec4(0.20f, 0.22f, 0.28f, 1.0f));
+                    float tw = Font::getTextWidth(o.label, 1.2f);
+                    Font::draw(ctx, p + glm::vec2((s.x - tw) * 0.5f, 6.0f),
+                        o.label, glm::vec4(0.95f), 1.2f);
+                    actionHits.push_back({ o.type, p, s, -1 });
+                    my += 28.0f;
+                }
+            }
+        }
+    }
+    else
+    {
+        lastCreateMenuSize = { 0.0f, 0.0f };
+    }
 }
 
 bool HierarchyPanel::onMouseMove(const glm::vec2& worldMousePos)
 {
     hoveredId = 0;
-
-    if (!visible || !enabled)
-        return Panel::onMouseMove(worldMousePos);
+    listScroll.onMouseMove(worldMousePos);
+    if (!visible || !enabled) return Panel::onMouseMove(worldMousePos);
 
     for (const auto& item : itemRects)
     {
+        if (item.isCategory) continue;
         bool inside =
-            worldMousePos.x >= item.pos.x &&
-            worldMousePos.x <= item.pos.x + item.size.x &&
-            worldMousePos.y >= item.pos.y &&
-            worldMousePos.y <= item.pos.y + item.size.y;
-
-        if (inside)
-        {
-            hoveredId = item.id;
-            break;
-        }
+            worldMousePos.x >= item.pos.x && worldMousePos.x <= item.pos.x + item.size.x &&
+            worldMousePos.y >= item.pos.y && worldMousePos.y <= item.pos.y + item.size.y;
+        if (inside) { hoveredId = item.id; break; }
     }
-
     return Panel::onMouseMove(worldMousePos);
 }
 
 bool HierarchyPanel::onMouseButton(int button, int action, const glm::vec2& worldMousePos)
 {
-    if (!visible || !enabled) return false;
-    if (Panel::onMouseButton(button, action, worldMousePos)) return true;
-    if (button != GLFW_MOUSE_BUTTON_LEFT || action != GLFW_PRESS) return false;
+    if (!visible || !enabled)
+        return false;
 
-    for (const auto& btn : actionButtons)
+    if (searchBox.onMouseButton(button, action, worldMousePos))
+        return true;
+
+    if (Panel::onMouseButton(button, action, worldMousePos))
+        return true;
+
+    if (button != GLFW_MOUSE_BUTTON_LEFT || action != GLFW_PRESS)
+        return false;
+
+    for (const auto& hit : actionHits)
     {
         bool inside =
-            worldMousePos.x >= btn.pos.x &&
-            worldMousePos.x <= btn.pos.x + btn.size.x &&
-            worldMousePos.y >= btn.pos.y &&
-            worldMousePos.y <= btn.pos.y + btn.size.y;
+            worldMousePos.x >= hit.pos.x && worldMousePos.x <= hit.pos.x + hit.size.x &&
+            worldMousePos.y >= hit.pos.y && worldMousePos.y <= hit.pos.y + hit.size.y;
+        if (!inside) continue;
 
-        if (inside)
+        switch (hit.type)
         {
-            if (btn.type == ActionButton::Type::CreateCube) createCube();
-            else if (btn.type == ActionButton::Type::Delete) deleteSelected();
-            else if (btn.type == ActionButton::Type::SaveScene) saveScene();
-            else if (btn.type == ActionButton::Type::LoadScene) loadScene();
+        case ActionHit::Type::OpenCreateMenu:
+            if (createMenuOpen && createMenuCategory == hit.categoryIndex)
+            {
+                createMenuOpen = false;
+                staticMeshMenuOpen = false;
+                createMenuCategory = -1;
+            }
+            else
+            {
+                createMenuOpen = true;
+                staticMeshMenuOpen = false;
+                createMenuCategory = hit.categoryIndex;
+            }
             return true;
+        case ActionHit::Type::ToggleStaticMeshMenu:
+            staticMeshMenuOpen = !staticMeshMenuOpen;
+            return true;
+        case ActionHit::Type::CreateStaticCube:
+            createStaticMesh(MeshType::Cube, "Cube"); return true;
+        case ActionHit::Type::CreateStaticPlane:
+            createStaticMesh(MeshType::Plane, "Plane"); return true;
+        case ActionHit::Type::CreateStaticPyramid:
+            createStaticMesh(MeshType::ImportedModel, "Pyramid"); return true;
+        case ActionHit::Type::CreateStaticCustom:
+            createStaticMesh(MeshType::Cube, "StaticMesh"); return true;
+        case ActionHit::Type::CreateStaticSphere:
+            std::cout << "Sphere mesh not implemented yet\n";
+            createMenuOpen = false; staticMeshMenuOpen = false; return true;
+        case ActionHit::Type::CreateStaticCone:
+            std::cout << "Cone mesh not implemented yet\n";
+            createMenuOpen = false; staticMeshMenuOpen = false; return true;
+        case ActionHit::Type::Delete:
+            deleteSelected(); return true;
+        case ActionHit::Type::SaveScene:
+            saveScene(); return true;
+        case ActionHit::Type::LoadScene:
+            loadScene(); return true;
         }
+    }
+
+    if (createMenuOpen && lastCreateMenuSize.x > 0.0f)
+    {
+        bool insideMenu =
+            worldMousePos.x >= lastCreateMenuPos.x &&
+            worldMousePos.x <= lastCreateMenuPos.x + lastCreateMenuSize.x &&
+            worldMousePos.y >= lastCreateMenuPos.y &&
+            worldMousePos.y <= lastCreateMenuPos.y + lastCreateMenuSize.y;
+        if (insideMenu) return true;
     }
 
     for (const auto& item : itemRects)
     {
         bool inside =
-            worldMousePos.x >= item.pos.x &&
-            worldMousePos.x <= item.pos.x + item.size.x &&
-            worldMousePos.y >= item.pos.y &&
-            worldMousePos.y <= item.pos.y + item.size.y;
+            worldMousePos.x >= item.pos.x && worldMousePos.x <= item.pos.x + item.size.x &&
+            worldMousePos.y >= item.pos.y && worldMousePos.y <= item.pos.y + item.size.y;
+        if (!inside) continue;
 
-        if (inside)
+        if (item.isCategory)
         {
-            selectedId = item.id;
-            std::cout << "Selected object ID: " << selectedId << "\n";
+            categories[item.categoryIndex].expanded = !categories[item.categoryIndex].expanded;
             return true;
         }
+        selectedId = item.id;
+        if (renaming && renameId != selectedId) cancelRename();
+        return true;
     }
 
+    createMenuOpen = false;
+    staticMeshMenuOpen = false;
+    createMenuCategory = -1;
     return false;
-}
-
-void HierarchyPanel::saveScene()
-{
-    if (!scene) return;
-    SceneSerializer::save(*scene);   // empty path → defaultScenePath()
-}
-
-void HierarchyPanel::loadScene()
-{
-    if (!scene) return;
-    SceneSerializer::load(*scene);
-    selectedId = 0;
-    hoveredId = 0;
 }

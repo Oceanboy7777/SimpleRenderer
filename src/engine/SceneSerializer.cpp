@@ -1,5 +1,6 @@
 #include "SceneSerializer.hpp"
 #include "GameObject.hpp"
+#include "ProjectManager.hpp"
 
 #include <fstream>
 #include <sstream>
@@ -12,8 +13,10 @@ namespace fs = std::filesystem;
 
 std::string SceneSerializer::defaultScenePath()
 {
+    if (ProjectManager::current())
+        return (ProjectManager::scenesDir() / "main.scene").string();
+
 #ifdef SIMPLERENDERER_ASSET_DIR
-    // Absolute path baked in at compile time — does not depend on cwd
     return std::string(SIMPLERENDERER_ASSET_DIR) + "/scenes/main.scene";
 #else
     return "assets/scenes/main.scene";
@@ -40,7 +43,6 @@ bool SceneSerializer::save(const Scene& scene, const std::string& path)
     if (!file.is_open())
     {
         std::cerr << "[SceneSerializer] Failed to WRITE: " << finalPath << "\n";
-        std::cerr << "[SceneSerializer] cwd = " << fs::current_path().string() << "\n";
         return false;
     }
 
@@ -51,7 +53,6 @@ bool SceneSerializer::save(const Scene& scene, const std::string& path)
         const glm::vec3 p = obj->getPosition();
         const glm::vec3 s = obj->getScale();
         const glm::vec3 c = obj->getColor();
-
         const int mesh = static_cast<int>(obj->getMeshType());
         const int mat = static_cast<int>(obj->getMaterialType());
 
@@ -59,15 +60,13 @@ bool SceneSerializer::save(const Scene& scene, const std::string& path)
             << p.x << ' ' << p.y << ' ' << p.z << ' '
             << s.x << ' ' << s.y << ' ' << s.z << ' '
             << c.r << ' ' << c.g << ' ' << c.b << ' '
-            << mesh << ' ' << mat << '\n';
+            << mesh << ' ' << mat
+            << " \"" << obj->getMeshPath() << "\"\n";
     }
 
     file.flush();
     if (!file.good())
-    {
-        std::cerr << "[SceneSerializer] Write error after flush: " << finalPath << "\n";
         return false;
-    }
 
     std::cout << "[SceneSerializer] Saved " << scene.getObjects().size()
         << " objects -> " << finalPath << "\n";
@@ -82,14 +81,11 @@ bool SceneSerializer::load(Scene& scene, const std::string& path)
     if (!file.is_open())
     {
         std::cerr << "[SceneSerializer] Failed to READ: " << finalPath << "\n";
-        std::cerr << "[SceneSerializer] cwd = " << fs::current_path().string() << "\n";
         return false;
     }
 
-    // Remove all current objects
     {
         std::vector<std::uint64_t> ids;
-        ids.reserve(scene.getObjects().size());
         for (const auto& obj : scene.getObjects())
             ids.push_back(obj->getId());
         for (std::uint64_t id : ids)
@@ -124,9 +120,14 @@ bool SceneSerializer::load(Scene& scene, const std::string& path)
         float px, py, pz, sx, sy, sz, cr, cg, cb;
         int mesh = 0, mat = 0;
         if (!(ss >> px >> py >> pz >> sx >> sy >> sz >> cr >> cg >> cb >> mesh >> mat))
-        {
-            std::cerr << "[SceneSerializer] Skipping bad line: " << line << "\n";
             continue;
+
+        ss >> std::ws;
+        std::string meshPath;
+        if (ss.peek() == '"')
+        {
+            ss.get();
+            std::getline(ss, meshPath, '"');
         }
 
         MeshType meshType = MeshType::Cube;
@@ -139,7 +140,7 @@ bool SceneSerializer::load(Scene& scene, const std::string& path)
         if (mat == static_cast<int>(MaterialType::Ground))
             matType = MaterialType::Ground;
 
-        scene.createObject(
+        GameObject& created = scene.createObject(
             name,
             glm::vec3(px, py, pz),
             glm::vec3(sx, sy, sz),
@@ -148,10 +149,14 @@ bool SceneSerializer::load(Scene& scene, const std::string& path)
             meshType,
             matType
         );
+
+        if (!meshPath.empty())
+            created.setMeshPath(meshPath);
+
         ++loaded;
     }
 
     std::cout << "[SceneSerializer] Loaded " << loaded
         << " objects <- " << finalPath << "\n";
-    return loaded > 0 || true; // empty scene file is still "success"
+    return true;
 }

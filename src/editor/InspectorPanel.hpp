@@ -1,10 +1,13 @@
 #pragma once
 
 #include "ui/Panel.hpp"
+#include "ui/TextBox.hpp"
 #include "engine/Scene.hpp"
+#include "engine/GameObject.hpp"
+
 #include <cstdint>
-#include <vector>
 #include <string>
+#include <vector>
 #include <glm/glm.hpp>
 
 class InspectorPanel : public Panel
@@ -19,27 +22,37 @@ public:
     void draw(UIContext& ctx) override;
     bool onMouseButton(int button, int action, const glm::vec2& worldMousePos) override;
 
+    void onKey(int key, int action);
+    void onChar(unsigned int codepoint);
+
 private:
-    enum class FieldType
+    enum class Field
     {
-        PositionX, PositionY, PositionZ,
+        PosX, PosY, PosZ,
         ScaleX, ScaleY, ScaleZ,
-        ColorR, ColorG, ColorB
+        RotX, RotY, RotZ,
+        ColR, ColG, ColB,
+        Count
     };
 
-    struct ButtonHit
+    struct MeshHit
     {
-        FieldType field;
-        float delta;          // +0.25 or -0.25 etc.
-        glm::vec2 pos;
-        glm::vec2 size;
+        std::string path;
+        glm::vec2 pos{ 0.0f };
+        glm::vec2 size{ 0.0f };
     };
 
     Scene* scene = nullptr;
     std::uint64_t selectedId = 0;
-    std::vector<ButtonHit> buttonHits;
+    std::uint64_t lastSyncedId = 0;
 
-    void applyChange(FieldType field, float delta);
-    void drawFloatRow(UIContext& ctx, float& y, const std::string& label,
-        float value, FieldType field, float step);
+    TextBox fields[static_cast<int>(Field::Count)];
+    std::vector<MeshHit> meshHits;
+
+    void setupFields();
+    void syncFieldsFromObject();
+    void applyField(Field field, const std::string& text);
+    void layoutAndDrawFields(UIContext& ctx, float& y);
+    void drawMeshSection(UIContext& ctx, float& y, GameObject* obj);
+    static float parseFloat(const std::string& text, float fallback);
 };

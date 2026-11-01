@@ -89,19 +89,26 @@ add_executable(SimpleRenderer
     src/engine/Material.cpp
     src/engine/Renderer.cpp
     src/engine/Shader.cpp
+    src/engine/SceneSerializer.cpp
+    src/engine/ProjectManager.cpp
+    src/engine/FileDialog.cpp
+    src/engine/Picker.cpp
 
-    # UI
     src/ui/UIContext.cpp
     src/ui/Widget.cpp
     src/ui/Panel.cpp
     src/ui/Button.cpp
     src/ui/Font.cpp
-    src/ui/Label.cpp
+    src/ui/Checkbox.cpp
+    src/ui/ScrollFrame.cpp
+    src/ui/TextBox.cpp
 
-    # Editor
     src/editor/HierarchyPanel.cpp
     src/editor/InspectorPanel.cpp
-    src/engine/SceneSerializer.cpp
+    src/editor/ContentBrowserPanel.cpp
+    src/editor/LauncherPanel.cpp
+    src/editor/ContentBrowserPanel.cpp
+    src/editor/SceneDialog.cpp
 )
 
 target_include_directories(SimpleRenderer PRIVATE
@@ -111,6 +118,7 @@ target_include_directories(SimpleRenderer PRIVATE
 
 target_compile_definitions(SimpleRenderer PRIVATE
     SIMPLERENDERER_ASSET_DIR="${CMAKE_SOURCE_DIR}/assets"
+    SIMPLERENDERER_PROJECT_ROOT="${CMAKE_SOURCE_DIR}"
 )
 
 
@@ -128,7 +136,7 @@ if(MSVC)
     )
 endif()
 
-# Make relative asset paths resolve from the project directory.
+# Make relative asset paths resolve from the project directory
 set_property(
     TARGET SimpleRenderer
     PROPERTY VS_DEBUGGER_WORKING_DIRECTORY
