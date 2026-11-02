@@ -35,7 +35,6 @@ public:
     );
 
     void update(float deltaTime);
-
     void setColor(const glm::vec3& color);
 
     std::uint64_t getId() const;
@@ -60,24 +59,23 @@ public:
     std::uint64_t getParentId() const;
     void setParentId(std::uint64_t parentId);
 
-    // Custom mesh file (.obj). Empty = use built-in MeshType.
     const std::string& getMeshPath() const;
     void setMeshPath(const std::string& path);
     void clearMeshPath();
 
+    const std::string& getTexturePath() const;
+    void setTexturePath(const std::string& path);
+    void clearTexturePath();
+
 private:
     std::uint64_t id;
     std::string name;
-
     Transform transform;
-
     glm::vec3 color;
     float rotationSpeed;
-
     MeshType meshType;
     MaterialType materialType;
-
     std::uint64_t parentId;
-
     std::string meshPath;
+    std::string texturePath;
 };

@@ -25,6 +25,8 @@ public:
     void onKey(int key, int action);
     void onChar(unsigned int codepoint);
 
+    void refreshFromObject();
+
 private:
     enum class Field
     {
@@ -35,7 +37,7 @@ private:
         Count
     };
 
-    struct MeshHit
+    struct PathHit
     {
         std::string path;
         glm::vec2 pos{ 0.0f };
@@ -47,12 +49,15 @@ private:
     std::uint64_t lastSyncedId = 0;
 
     TextBox fields[static_cast<int>(Field::Count)];
-    std::vector<MeshHit> meshHits;
+    std::vector<PathHit> meshHits;
+    std::vector<PathHit> textureHits;
 
     void setupFields();
     void syncFieldsFromObject();
     void applyField(Field field, const std::string& text);
     void layoutAndDrawFields(UIContext& ctx, float& y);
     void drawMeshSection(UIContext& ctx, float& y, GameObject* obj);
+    void drawTextureSection(UIContext& ctx, float& y, GameObject* obj);
     static float parseFloat(const std::string& text, float fallback);
+    bool anyFieldFocused() const;
 };

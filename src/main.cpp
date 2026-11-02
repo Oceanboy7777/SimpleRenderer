@@ -7,23 +7,29 @@
 #include "engine/ProjectManager.hpp"
 #include "engine/SceneSerializer.hpp"
 #include "engine/Picker.hpp"
+#include "engine/GameObject.hpp"
 
 #include "ui/UIContext.hpp"
 #include "ui/Font.hpp"
 
+#include "editor/GizmoMode.hpp"
 #include "editor/LauncherPanel.hpp"
 #include "editor/HierarchyPanel.hpp"
 #include "editor/InspectorPanel.hpp"
 #include "editor/ContentBrowserPanel.hpp"
 #include "editor/SceneDialog.hpp"
+#include "editor/TransformToolbar.hpp"
+#include "editor/PlayToolbar.hpp"
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <memory>
-#include <filesystem>
-#include <cmath>
 
 namespace
 {
@@ -41,13 +47,6 @@ namespace
         Editor
     };
 
-    enum class GizmoMode
-    {
-        Translate,
-        Rotate,
-        Scale
-    };
-
     enum class ResizeEdge
     {
         None,
@@ -61,6 +60,7 @@ namespace
         Camera* camera = nullptr;
         Scene* scene = nullptr;
         HierarchyPanel* hierarchy = nullptr;
+        TransformToolbar* transformToolbar = nullptr;
 
         AppMode* appMode = nullptr;
         bool* editMode = nullptr;
@@ -78,12 +78,123 @@ namespace
 
         GizmoMode gizmoMode = GizmoMode::Translate;
 
-        // Panel layout
         float leftW = 280.0f;
         float rightW = 280.0f;
         float bottomH = 180.0f;
         ResizeEdge resizeEdge = ResizeEdge::None;
+
+        // Gizmo drag
+        bool gizmoDragging = false;
+        int gizmoAxis = -1;
+        glm::vec3 gizmoDragStartObj{ 0.0f };
+        glm::vec3 gizmoDragStartHit{ 0.0f };
+        glm::vec3 gizmoDragStartRot{ 0.0f };
+        glm::vec3 gizmoDragStartScale{ 1.0f };
+        float gizmoDragStartMouseX = 0.0f;
+        float gizmoDragStartMouseY = 0.0f;
     };
+
+    bool rayPlane(
+        const glm::vec3& ro,
+        const glm::vec3& rd,
+        const glm::vec3& planePoint,
+        const glm::vec3& planeN,
+        glm::vec3& outHit)
+    {
+        const float denom = glm::dot(planeN, rd);
+        if (std::abs(denom) < 1e-6f)
+            return false;
+        const float t = glm::dot(planePoint - ro, planeN) / denom;
+        if (t < 0.0f)
+            return false;
+        outHit = ro + rd * t;
+        return true;
+    }
+
+    void screenToRay(
+        const Camera& camera,
+        int mx,
+        int my,
+        int w,
+        int h,
+        glm::vec3& origin,
+        glm::vec3& dir)
+    {
+        const float ndcX = (2.0f * static_cast<float>(mx)) / static_cast<float>(std::max(w, 1)) - 1.0f;
+        const float ndcY = 1.0f - (2.0f * static_cast<float>(my)) / static_cast<float>(std::max(h, 1));
+        const float aspect = static_cast<float>(w) / static_cast<float>(std::max(h, 1));
+
+        const glm::mat4 invProj = glm::inverse(glm::perspective(
+            glm::radians(camera.getFieldOfView()), aspect, 0.1f, 500.0f));
+        const glm::mat4 invView = glm::inverse(camera.getViewMatrix());
+
+        glm::vec4 eye = invProj * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+        eye = glm::vec4(eye.x, eye.y, -1.0f, 0.0f);
+        dir = glm::normalize(glm::vec3(invView * eye));
+        origin = camera.getPosition();
+    }
+
+    int pickGizmoAxis(
+        const Camera& camera,
+        const glm::vec3& objPos,
+        int mx,
+        int my,
+        int w,
+        int h)
+    {
+        glm::vec3 ro;
+        glm::vec3 rd;
+        screenToRay(camera, mx, my, w, h, ro, rd);
+
+        const float axisLen = 1.25f;
+        const float hitR = 0.22f;
+        float bestT = 1e9f;
+        int best = -1;
+
+        auto testAxis = [&](int axis, const glm::vec3& aDir)
+            {
+                const glm::vec3 a0 = objPos;
+                const glm::vec3 a1 = objPos + aDir * axisLen;
+                const glm::vec3 u = rd;
+                const glm::vec3 v = a1 - a0;
+                const glm::vec3 w0 = ro - a0;
+                const float a = glm::dot(u, u);
+                const float b = glm::dot(u, v);
+                const float c = glm::dot(v, v);
+                const float d = glm::dot(u, w0);
+                const float e = glm::dot(v, w0);
+                const float denom = a * c - b * b;
+                float t = 0.0f;
+                float s = 0.0f;
+                if (std::abs(denom) < 1e-8f)
+                {
+                    t = 0.0f;
+                    s = (c > 1e-8f) ? e / c : 0.0f;
+                }
+                else
+                {
+                    t = (b * e - c * d) / denom;
+                    s = (a * e - b * d) / denom;
+                }
+                s = std::clamp(s, 0.0f, 1.0f);
+                if (t < 0.0f)
+                    return;
+
+                const glm::vec3 pRay = ro + u * t;
+                const glm::vec3 pAxis = a0 + v * s;
+                const float dist = glm::length(pRay - pAxis);
+                if (dist < hitR && t < bestT)
+                {
+                    bestT = t;
+                    best = axis;
+                }
+            };
+
+        testAxis(0, { 1.0f, 0.0f, 0.0f });
+        testAxis(1, { 0.0f, 1.0f, 0.0f });
+        testAxis(2, { 0.0f, 0.0f, 1.0f });
+        return best;
+    }
 
     void cursorPosCallback(GLFWwindow* window, double x, double y)
     {
@@ -94,7 +205,8 @@ namespace
         if (!input)
             return;
 
-        int fbW = 0, fbH = 0;
+        int fbW = 0;
+        int fbH = 0;
         glfwGetFramebufferSize(window, &fbW, &fbH);
         const float w = static_cast<float>(fbW);
         const float h = static_cast<float>(fbH);
@@ -112,7 +224,63 @@ namespace
                 input->rightW = std::clamp(w - static_cast<float>(x), minSide, maxSide);
             else if (input->resizeEdge == ResizeEdge::Bottom)
                 input->bottomH = std::clamp(h - static_cast<float>(y), minBottom, maxBottom);
+            return;
+        }
 
+        if (input->gizmoDragging
+            && input->scene
+            && input->camera
+            && input->hierarchy
+            && input->gizmoAxis >= 0)
+        {
+            const std::uint64_t sel = input->hierarchy->getSelectedId();
+            GameObject* obj = input->scene->findObjectById(sel);
+            if (obj)
+            {
+                Transform& t = obj->getTransform();
+
+                if (input->gizmoMode == GizmoMode::Translate)
+                {
+                    glm::vec3 ro;
+                    glm::vec3 rd;
+                    screenToRay(*input->camera, static_cast<int>(x), static_cast<int>(y), fbW, fbH, ro, rd);
+
+                    glm::vec3 axisDir(0.0f);
+                    axisDir[input->gizmoAxis] = 1.0f;
+                    glm::vec3 planeN = glm::cross(axisDir, glm::cross(input->camera->getFront(), axisDir));
+                    if (glm::length(planeN) < 1e-4f)
+                        planeN = glm::vec3(0.0f, 1.0f, 0.0f);
+                    else
+                        planeN = glm::normalize(planeN);
+
+                    glm::vec3 hit;
+                    if (rayPlane(ro, rd, input->gizmoDragStartObj, planeN, hit))
+                    {
+                        const glm::vec3 delta = hit - input->gizmoDragStartHit;
+                        const float along = glm::dot(delta, axisDir);
+                        glm::vec3 newPos = input->gizmoDragStartObj;
+                        newPos[input->gizmoAxis] = input->gizmoDragStartObj[input->gizmoAxis] + along;
+                        t.setPosition(newPos);
+                    }
+                }
+                else if (input->gizmoMode == GizmoMode::Rotate)
+                {
+                    const float dx = static_cast<float>(x) - input->gizmoDragStartMouseX;
+                    glm::vec3 rot = input->gizmoDragStartRot;
+                    rot[input->gizmoAxis] += dx * 0.4f;
+                    t.setRotation(rot);
+                }
+                else if (input->gizmoMode == GizmoMode::Scale)
+                {
+                    const float dy = input->gizmoDragStartMouseY - static_cast<float>(y);
+                    glm::vec3 scale = input->gizmoDragStartScale;
+                    scale[input->gizmoAxis] = std::max(0.05f, input->gizmoDragStartScale[input->gizmoAxis] + dy * 0.01f);
+                    t.setScale(scale);
+                }
+
+                if (g_inspector)
+                    g_inspector->setSelectedId(sel);
+            }
             return;
         }
 
@@ -161,32 +329,32 @@ namespace
 
         if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
         {
-            int fbW = 0, fbH = 0;
+            int fbW = 0;
+            int fbH = 0;
             glfwGetFramebufferSize(window, &fbW, &fbH);
 
-            double mx = 0.0, my = 0.0;
+            double mx = 0.0;
+            double my = 0.0;
             glfwGetCursorPos(window, &mx, &my);
 
-            // Resize edges (editor only)
             if (input->appMode && *input->appMode == AppMode::Editor
                 && input->editMode && *input->editMode)
             {
-                const float w = static_cast<float>(fbW);
-                const float h = static_cast<float>(fbH);
-                const float x = static_cast<float>(mx);
-                const float y = static_cast<float>(my);
+                const float wf = static_cast<float>(fbW);
+                const float hf = static_cast<float>(fbH);
+                const float xf = static_cast<float>(mx);
+                const float yf = static_cast<float>(my);
                 const float grip = 6.0f;
 
                 input->resizeEdge = ResizeEdge::None;
-                if (std::abs(x - input->leftW) <= grip && y < h - input->bottomH)
+                if (std::abs(xf - input->leftW) <= grip && yf < hf - input->bottomH)
                     input->resizeEdge = ResizeEdge::Left;
-                else if (std::abs(x - (w - input->rightW)) <= grip && y < h - input->bottomH)
+                else if (std::abs(xf - (wf - input->rightW)) <= grip && yf < hf - input->bottomH)
                     input->resizeEdge = ResizeEdge::Right;
-                else if (std::abs(y - (h - input->bottomH)) <= grip)
+                else if (std::abs(yf - (hf - input->bottomH)) <= grip)
                     input->resizeEdge = ResizeEdge::Bottom;
             }
 
-            // 3D pick (only if not over UI and not resizing)
             const bool overUI = (g_ui && g_ui->isMouseOverUI());
             if (!overUI
                 && input->resizeEdge == ResizeEdge::None
@@ -194,28 +362,82 @@ namespace
                 && input->editMode && *input->editMode
                 && input->scene && input->camera && input->hierarchy)
             {
+                const std::uint64_t sel = input->hierarchy->getSelectedId();
+                if (sel != 0)
+                {
+                    GameObject* obj = input->scene->findObjectById(sel);
+                    if (obj)
+                    {
+                        const int axis = pickGizmoAxis(
+                            *input->camera,
+                            obj->getPosition(),
+                            static_cast<int>(mx),
+                            static_cast<int>(my),
+                            fbW,
+                            fbH);
+
+                        if (axis >= 0)
+                        {
+                            input->gizmoDragging = true;
+                            input->gizmoAxis = axis;
+                            input->gizmoDragStartObj = obj->getPosition();
+                            input->gizmoDragStartRot = obj->getTransform().getRotation();
+                            input->gizmoDragStartScale = obj->getScale();
+                            input->gizmoDragStartMouseX = static_cast<float>(mx);
+                            input->gizmoDragStartMouseY = static_cast<float>(my);
+
+                            glm::vec3 ro;
+                            glm::vec3 rd;
+                            screenToRay(
+                                *input->camera,
+                                static_cast<int>(mx),
+                                static_cast<int>(my),
+                                fbW,
+                                fbH,
+                                ro,
+                                rd);
+
+                            glm::vec3 axisDir(0.0f);
+                            axisDir[axis] = 1.0f;
+                            glm::vec3 planeN = glm::cross(axisDir, glm::cross(input->camera->getFront(), axisDir));
+                            if (glm::length(planeN) < 1e-4f)
+                                planeN = glm::vec3(0.0f, 1.0f, 0.0f);
+                            else
+                                planeN = glm::normalize(planeN);
+
+                            glm::vec3 hit;
+                            if (rayPlane(ro, rd, obj->getPosition(), planeN, hit))
+                                input->gizmoDragStartHit = hit;
+                            else
+                                input->gizmoDragStartHit = obj->getPosition();
+
+                            return;
+                        }
+                    }
+                }
+
                 const std::uint64_t id = Picker::pickObject(
                     *input->scene,
                     *input->camera,
                     static_cast<int>(mx),
                     static_cast<int>(my),
                     fbW,
-                    fbH
-                );
+                    fbH);
 
-                if (id != 0)
-                    input->hierarchy->setSelectedId(id);
+                // Click empty space → clear selection
+                input->hierarchy->setSelectedId(id);
             }
         }
 
         if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE)
         {
-            if (input)
-                input->resizeEdge = ResizeEdge::None;
+            input->resizeEdge = ResizeEdge::None;
+            input->gizmoDragging = false;
+            input->gizmoAxis = -1;
         }
     }
 
-    void scrollCallback(GLFWwindow* window, double, double yOffset)
+    void scrollCallback(GLFWwindow* window, double /*xOffset*/, double yOffset)
     {
         if (g_hierarchy)
             g_hierarchy->onScroll(static_cast<float>(yOffset));
@@ -251,26 +473,43 @@ namespace
                 const GLFWvidmode* mode = glfwGetVideoMode(monitor);
                 if (monitor && mode)
                 {
-                    glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+                    glfwSetWindowMonitor(
+                        window, monitor, 0, 0,
+                        mode->width, mode->height, mode->refreshRate);
                     input->fullscreen = true;
                 }
             }
             else
             {
-                glfwSetWindowMonitor(window, nullptr, input->windowedX, input->windowedY, input->windowedW, input->windowedH, 0);
+                glfwSetWindowMonitor(
+                    window, nullptr,
+                    input->windowedX, input->windowedY,
+                    input->windowedW, input->windowedH, 0);
                 input->fullscreen = false;
             }
         }
 
+        // R = position, T = rotation, Y = scale
         if (action == GLFW_PRESS && input->appMode && *input->appMode == AppMode::Editor)
         {
-            // Gizmo modes (T position, R rotate, Y scale)
-            if (key == GLFW_KEY_T)
+            if (key == GLFW_KEY_R)
+            {
                 input->gizmoMode = GizmoMode::Translate;
-            else if (key == GLFW_KEY_R)
+                if (input->transformToolbar)
+                    input->transformToolbar->setMode(GizmoMode::Translate);
+            }
+            else if (key == GLFW_KEY_T)
+            {
                 input->gizmoMode = GizmoMode::Rotate;
+                if (input->transformToolbar)
+                    input->transformToolbar->setMode(GizmoMode::Rotate);
+            }
             else if (key == GLFW_KEY_Y)
+            {
                 input->gizmoMode = GizmoMode::Scale;
+                if (input->transformToolbar)
+                    input->transformToolbar->setMode(GizmoMode::Scale);
+            }
         }
     }
 
@@ -278,17 +517,16 @@ namespace
     {
         if (g_hierarchy)
             g_hierarchy->onChar(codepoint);
-
         if (g_inspector)
             g_inspector->onChar(codepoint);
-
         if (g_content)
             g_content->onChar(codepoint);
     }
 
-    void framebufferSizeCallback(GLFWwindow*, int width, int height)
+    void framebufferSizeCallback(GLFWwindow* /*window*/, int width, int height)
     {
-        if (g_ui) g_ui->onFramebufferSize(width, height);
+        if (g_ui)
+            g_ui->onFramebufferSize(width, height);
         glViewport(0, 0, width, height);
     }
 
@@ -297,8 +535,10 @@ namespace
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
             glfwSetWindowShouldClose(window, GLFW_TRUE);
 
-        if (!allowMove) return;
-        if (g_ui && g_ui->isMouseOverUI()) return;
+        if (!allowMove)
+            return;
+        if (g_ui && g_ui->isMouseOverUI())
+            return;
 
         glm::vec3 movement(0.0f);
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) movement += camera.getFront();
@@ -308,7 +548,7 @@ namespace
         if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) movement.y += 1.0f;
         if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) movement.y -= 1.0f;
 
-        float len = glm::length(movement);
+        const float len = glm::length(movement);
         if (len > 0.0f)
         {
             movement /= len;
@@ -321,13 +561,14 @@ namespace
         InspectorPanel* inspector,
         ContentBrowserPanel* content,
         SceneDialog* dialog,
+        TransformToolbar* transformTb,
+        PlayToolbar* playTb,
         const InputState& input,
         int width,
         int height)
     {
         const float w = static_cast<float>(width);
         const float h = static_cast<float>(height);
-
         const float leftW = input.leftW;
         const float rightW = input.rightW;
         const float bottomH = input.bottomH;
@@ -343,19 +584,31 @@ namespace
 
         dialog->setPosition({ w * 0.5f - 300.0f, h * 0.5f - 180.0f });
         dialog->setSize({ 600.0f, 360.0f });
+
+        transformTb->setPosition({ w - rightW - 168.0f - 8.0f, 8.0f });
+        transformTb->setSize({ 168.0f, 36.0f });
+
+        playTb->setPosition({ w * 0.5f - 70.0f, 8.0f });
+        playTb->setSize({ 140.0f, 36.0f });
     }
 }
 
 int main()
 {
-    if (!glfwInit()) return EXIT_FAILURE;
+    if (!glfwInit())
+        return EXIT_FAILURE;
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(windowWidth, windowHeight, "SimpleRenderer - Launcher", nullptr, nullptr);
-    if (!window) { glfwTerminate(); return EXIT_FAILURE; }
+    GLFWwindow* window = glfwCreateWindow(
+        windowWidth, windowHeight, "SimpleRenderer - Launcher", nullptr, nullptr);
+    if (!window)
+    {
+        glfwTerminate();
+        return EXIT_FAILURE;
+    }
 
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
@@ -368,11 +621,14 @@ int main()
 
     UIContext ui;
     g_ui = &ui;
-    if (!ui.init()) return EXIT_FAILURE;
+    if (!ui.init())
+        return EXIT_FAILURE;
+
     Font::init();
     ProjectManager::ensureProjectsRoot();
 
     AppMode mode = AppMode::Launcher;
+    bool editMode = true;
 
     auto launcher = std::make_unique<LauncherPanel>();
     launcher->setSize({ static_cast<float>(windowWidth), static_cast<float>(windowHeight) });
@@ -398,10 +654,18 @@ int main()
     sceneDialog->setScene(&scene);
     sceneDialog->setVisible(false);
 
+    auto transformToolbar = std::make_unique<TransformToolbar>();
+    transformToolbar->setVisible(false);
+
+    auto playToolbar = std::make_unique<PlayToolbar>();
+    playToolbar->setVisible(false);
+
     HierarchyPanel* hierarchyPtr = hierarchy.get();
     InspectorPanel* inspectorPtr = inspector.get();
     ContentBrowserPanel* contentPtr = contentBrowser.get();
     SceneDialog* dialogPtr = sceneDialog.get();
+    TransformToolbar* transformTb = transformToolbar.get();
+    PlayToolbar* playTb = playToolbar.get();
 
     g_hierarchy = hierarchyPtr;
     g_inspector = inspectorPtr;
@@ -412,6 +676,25 @@ int main()
     ui.getRoot().addChild(std::move(inspector));
     ui.getRoot().addChild(std::move(contentBrowser));
     ui.getRoot().addChild(std::move(sceneDialog));
+    ui.getRoot().addChild(std::move(transformToolbar));
+    ui.getRoot().addChild(std::move(playToolbar));
+
+    InputState input;
+    input.camera = &camera;
+    input.scene = &scene;
+    input.hierarchy = hierarchyPtr;
+    input.transformToolbar = transformTb;
+    input.appMode = &mode;
+    input.editMode = &editMode;
+
+    glfwSetWindowUserPointer(window, &input);
+    glfwSetCursorPosCallback(window, cursorPosCallback);
+    glfwSetMouseButtonCallback(window, mouseButtonCallback);
+    glfwSetScrollCallback(window, scrollCallback);
+    glfwSetKeyCallback(window, keyCallback);
+    glfwSetCharCallback(window, charCallback);
+    glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     launcherPtr->setOnProjectReady([&]()
         {
@@ -422,8 +705,12 @@ int main()
             contentPtr->setScene(&scene);
             contentPtr->setVisible(true);
             contentPtr->refresh();
+            transformTb->setVisible(true);
+            playTb->setVisible(true);
+            playTb->setPlaying(false);
+            editMode = true;
 
-            auto mainScene = ProjectManager::scenesDir() / "main.scene";
+            const auto mainScene = ProjectManager::scenesDir() / "main.scene";
             hierarchyPtr->setCurrentScenePath(mainScene);
             dialogPtr->setCurrentScenePath(mainScene);
             SceneSerializer::load(scene, mainScene.string());
@@ -432,34 +719,43 @@ int main()
             std::cout << "Entered EDITOR mode\n";
         });
 
-    bool editMode = true;
-    bool pWasDown = false;
+    playTb->setOnPlay([&]()
+        {
+            editMode = false;
+            hierarchyPtr->setVisible(false);
+            inspectorPtr->setVisible(false);
+            contentPtr->setVisible(false);
+            transformTb->setVisible(false);
+            playTb->setPlaying(true);
+            dialogPtr->close();
+        });
+
+    playTb->setOnStop([&]()
+        {
+            editMode = true;
+            hierarchyPtr->setVisible(true);
+            inspectorPtr->setVisible(true);
+            contentPtr->setVisible(true);
+            transformTb->setVisible(true);
+            playTb->setPlaying(false);
+        });
+
+    transformTb->setOnModeChanged([&](GizmoMode m)
+        {
+            input.gizmoMode = m;
+        });
+
+    bool playWasDown = false;
     float lastTime = 0.0f;
-
-    InputState input;
-    input.camera = &camera;
-    input.scene = &scene;
-    input.hierarchy = hierarchyPtr;
-    input.appMode = &mode;
-    input.editMode = &editMode;
-
-    glfwSetWindowUserPointer(window, &input);
-
-    glfwSetCursorPosCallback(window, cursorPosCallback);
-    glfwSetMouseButtonCallback(window, mouseButtonCallback);
-    glfwSetScrollCallback(window, scrollCallback);
-    glfwSetKeyCallback(window, keyCallback);
-    glfwSetCharCallback(window, charCallback);
-    glfwSetFramebufferSizeCallback(window, framebufferSizeCallback);
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     while (!glfwWindowShouldClose(window))
     {
-        float now = static_cast<float>(glfwGetTime());
-        float dt = std::min(now - lastTime, 0.1f);
+        const float now = static_cast<float>(glfwGetTime());
+        const float dt = std::min(now - lastTime, 0.1f);
         lastTime = now;
 
-        int width = 0, height = 0;
+        int width = 0;
+        int height = 0;
         glfwGetFramebufferSize(window, &width, &height);
 
         if (mode == AppMode::Launcher)
@@ -471,8 +767,6 @@ int main()
         }
         else
         {
-            static bool playWasDown = false;
-
             const bool altDown =
                 glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS ||
                 glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
@@ -487,12 +781,19 @@ int main()
                 hierarchyPtr->setVisible(editMode);
                 inspectorPtr->setVisible(editMode);
                 contentPtr->setVisible(editMode);
+                transformTb->setVisible(editMode);
+                playTb->setPlaying(!editMode);
                 if (!editMode)
                     dialogPtr->close();
             }
             playWasDown = playDown;
 
-            layoutEditorPanels(hierarchyPtr, inspectorPtr, contentPtr, dialogPtr, input, width, height);
+            layoutEditorPanels(
+                hierarchyPtr, inspectorPtr, contentPtr, dialogPtr,
+                transformTb, playTb, input, width, height);
+
+            playTb->setVisible(true);
+            transformTb->setVisible(editMode);
 
             if (!dialogPtr->getCurrentScenePath().empty())
                 hierarchyPtr->setCurrentScenePath(dialogPtr->getCurrentScenePath());
@@ -506,16 +807,27 @@ int main()
 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            std::uint64_t sel = editMode ? hierarchyPtr->getSelectedId() : 0;
+            const std::uint64_t selectedId =
+                editMode ? hierarchyPtr->getSelectedId() : 0;
+
             if (renderer.isValid())
-                renderer.render(scene, camera, width, height, selectedOutline, input.gizmoMode);
+            {
+                renderer.render(
+                    scene,
+                    camera,
+                    width,
+                    height,
+                    selectedId,
+                    input.gizmoMode,
+                    editMode
+                );
+            }
 
             if (editMode)
-            {
                 inspectorPtr->setSelectedId(hierarchyPtr->getSelectedId());
-                ui.beginFrame(dt);
-                ui.endFrame();
-            }
+
+            ui.beginFrame(dt);
+            ui.endFrame();
         }
 
         glfwSwapBuffers(window);

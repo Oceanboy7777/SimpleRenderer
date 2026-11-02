@@ -109,6 +109,8 @@ add_executable(SimpleRenderer
     src/editor/LauncherPanel.cpp
     src/editor/ContentBrowserPanel.cpp
     src/editor/SceneDialog.cpp
+    src/editor/TransformToolbar.cpp
+    src/editor/PlayToolbar.cpp
 )
 
 target_include_directories(SimpleRenderer PRIVATE
