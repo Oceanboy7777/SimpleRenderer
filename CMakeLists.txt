@@ -98,7 +98,7 @@ add_executable(SimpleRenderer
     src/ui/Widget.cpp
     src/ui/Panel.cpp
     src/ui/Button.cpp
-    src/ui/Font.cpp
+    
     src/ui/Checkbox.cpp
     src/ui/ScrollFrame.cpp
     src/ui/TextBox.cpp
@@ -111,7 +111,8 @@ add_executable(SimpleRenderer
     src/editor/SceneDialog.cpp
     src/editor/TransformToolbar.cpp
     src/editor/PlayToolbar.cpp
-)
+    src/editor/UIDesignerPanel.cpp
+ "src/ui/third_party/stb_truetype.h")
 
 target_include_directories(SimpleRenderer PRIVATE
     "${CMAKE_SOURCE_DIR}/src"

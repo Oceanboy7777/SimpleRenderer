@@ -69,6 +69,11 @@ private:
         int viewportWidth,
         int viewportHeight
     );
+    void drawUIOverlay(
+        const Scene& scene,
+        int viewportWidth,
+        int viewportHeight
+    );
 
     Shader shader;
     Shader shadowShader;

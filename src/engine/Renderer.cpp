@@ -9,6 +9,7 @@
 #include <limits>
 #include <unordered_map>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -430,6 +431,10 @@ void Renderer::drawObject(
     const GameObject& object,
     const Shader& targetShader)
 {
+    // UI objects are not 3D meshes — never draw them as cubes
+    if (object.isUI())
+        return;
+
     const glm::mat4 model = scene.getWorldMatrix(object.getId());
     targetShader.setMatrix4("model", glm::value_ptr(model));
 
@@ -587,19 +592,90 @@ void Renderer::drawSelectionOutline(
     unlitShader.setMatrix4("view", glm::value_ptr(view));
     unlitShader.setVector3("objectColor", 1.0f, 1.0f, 1.0f);
 
+    // Skip UI in 3D outline path
+    if (object.isUI())
+        return;
+
     glm::mat4 model = scene.getWorldMatrix(object.getId());
-    model = glm::scale(model, glm::vec3(1.04f));
     unlitShader.setMatrix4("model", glm::value_ptr(model));
 
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_FRONT);
-    glDepthMask(GL_FALSE);
+    // Draw mesh as wireframe so only visible silhouette edges show from current camera
+    glEnable(GL_POLYGON_OFFSET_LINE);
+    glPolygonOffset(-1.0f, -1.0f);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    glLineWidth(2.0f);
+    glDepthFunc(GL_LEQUAL);
 
-    meshForObject(object).draw();   // custom OBJ outline
+    meshForObject(object).draw();
 
-    glDepthMask(GL_TRUE);
-    glCullFace(GL_BACK);
-    glDisable(GL_CULL_FACE);
+    glDepthFunc(GL_LESS);
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    glDisable(GL_POLYGON_OFFSET_LINE);
+    glLineWidth(1.0f);
+}
+
+
+void Renderer::drawUIOverlay(
+    const Scene& scene,
+    int viewportWidth,
+    int viewportHeight)
+{
+    if (!unlitShader.isValid() || !cubeMesh.isValid())
+        return;
+
+    // Collect visible UI elements under visible UI roots
+    struct Item { const GameObject* obj; };
+    std::vector<Item> items;
+    for (const auto& rootPtr : scene.getObjects())
+    {
+        const GameObject& root = *rootPtr;
+        if (!root.isUIRoot() || !root.isVisible())
+            continue;
+        for (const auto& childPtr : scene.getObjects())
+        {
+            const GameObject& el = *childPtr;
+            if (el.getParentId() != root.getId()) continue;
+            if (!el.isUI() || el.isUIRoot()) continue;
+            if (!el.isVisible()) continue;
+            items.push_back({ &el });
+        }
+    }
+    if (items.empty()) return;
+
+    std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+        return a.obj->getZOrder() < b.obj->getZOrder();
+        });
+
+    const float w = static_cast<float>(std::max(viewportWidth, 1));
+    const float h = static_cast<float>(std::max(viewportHeight, 1));
+    // Ortho: origin top-left to match UI designer coords
+    glm::mat4 proj = glm::ortho(0.0f, w, h, 0.0f, -1.0f, 1.0f);
+    glm::mat4 view(1.0f);
+
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    unlitShader.use();
+    unlitShader.setMatrix4("projection", glm::value_ptr(proj));
+    unlitShader.setMatrix4("view", glm::value_ptr(view));
+
+    for (const Item& it : items)
+    {
+        const GameObject& el = *it.obj;
+        glm::vec2 pos(el.getPosition().x, el.getPosition().y);
+        glm::vec2 size = el.getUISize();
+        // Unit cube is 2x2 centered at origin → scale by size/2, translate to centre
+        glm::mat4 model(1.0f);
+        model = glm::translate(model, glm::vec3(pos.x + size.x * 0.5f, pos.y + size.y * 0.5f, 0.0f));
+        model = glm::scale(model, glm::vec3(size.x * 0.5f, size.y * 0.5f, 1.0f));
+        unlitShader.setMatrix4("model", glm::value_ptr(model));
+        const glm::vec3 c = el.getColor();
+        unlitShader.setVector3("objectColor", c.r, c.g, c.b);
+        cubeMesh.draw();
+    }
+
+    glEnable(GL_DEPTH_TEST);
 }
 
 void Renderer::render(
@@ -664,6 +740,9 @@ void Renderer::render(
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, 0);
     glActiveTexture(GL_TEXTURE0);
+
+    // Draw saved UI elements as 2D overlay on the engine viewport (visible only if root+element visible)
+    drawUIOverlay(scene, viewportWidth, viewportHeight);
 
     if (showGrid)
         drawGrid(camera, viewportWidth, viewportHeight);

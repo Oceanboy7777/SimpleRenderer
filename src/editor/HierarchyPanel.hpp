@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 #include <glm/glm.hpp>
@@ -27,6 +28,9 @@ public:
 
     void setSelectedId(std::uint64_t id);
     std::uint64_t getSelectedId() const;
+
+    // Called when user wants to open the UI Designer for a UIRoot
+    void setOnOpenUIDesigner(std::function<void(std::uint64_t uiRootId)> cb);
 
     void update(UIContext& ctx, float deltaTime) override;
     void draw(UIContext& ctx) override;
@@ -62,6 +66,7 @@ private:
         glm::vec2 size{ 0.0f };
         bool isCategory = false;
         int categoryIndex = -1;
+        bool isUIRoot = false;
     };
 
     struct ActionHit
@@ -76,6 +81,8 @@ private:
             CreateStaticSphere,
             CreateStaticCone,
             ToggleStaticMeshMenu,
+            CreateNewUserInterface,
+            OpenUIDesigner,
             SaveScene,
             LoadScene,
             Delete
@@ -83,7 +90,8 @@ private:
 
         glm::vec2 pos{ 0.0f };
         glm::vec2 size{ 0.0f };
-        int categoryIndex = -1;   // REQUIRED for OpenCreateMenu
+        int categoryIndex = -1;
+        std::uint64_t targetId = 0;
     };
 
     Scene* scene = nullptr;
@@ -103,7 +111,7 @@ private:
 
     glm::vec2 lastCreateMenuPos{ 0.0f };
     glm::vec2 lastCreateMenuSize{ 0.0f };
-    glm::vec2 lastCreateButtonPos{ 0.0f };   // REQUIRED
+    glm::vec2 lastCreateButtonPos{ 0.0f };
 
     TextBox searchBox;
     std::string searchFilter;
@@ -115,8 +123,11 @@ private:
     ScrollFrame listScroll;
     float listContentHeight = 0.0f;
 
+    std::function<void(std::uint64_t)> onOpenUIDesigner;
+
     void initCategories();
     void createStaticMesh(MeshType type, const std::string& name);
+    void createNewUserInterface();
     void beginRename();
     void commitRename();
     void cancelRename();

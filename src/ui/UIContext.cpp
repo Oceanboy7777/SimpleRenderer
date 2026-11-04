@@ -29,7 +29,7 @@ namespace
         }
     )";
 
-        const char* uiFragmentShader = R"(
+    const char* uiFragmentShader = R"(
             #version 330 core
             in vec4 vColor;
             in vec2 vUV;
@@ -303,4 +303,206 @@ void UIContext::onFramebufferSize(int width, int height)
 {
     framebufferWidth = width;
     framebufferHeight = height;
+}
+
+// ==== FONT IMPLEMENTATION ====
+#include "Font.hpp"
+
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "third_party/stb_truetype.h"
+
+#include <algorithm>
+#include <cstdio>
+
+namespace font_impl
+{
+    GLuint texture = 0;
+    bool ready = false;
+    bool isTTF = false;
+    int atlasW = 512;
+    int atlasH = 512;
+    float pixelH = 28.0f;
+    constexpr int kFirst = 32;
+    constexpr int kCount = 95;
+    stbtt_bakedchar chars[kCount];
+
+    bool initBitmapFallback()
+    {
+        // Minimal: solid white dots for every character so something shows
+        atlasW = 8 * kCount;
+        atlasH = 8;
+        std::vector<unsigned char> pixels((size_t)atlasW * atlasH, 0);
+        for (int i = 0; i < kCount; ++i)
+            for (int y = 0; y < 8; ++y)
+                for (int x = 1; x < 7; ++x)
+                    if (y > 0 && y < 7)
+                        pixels[y * atlasW + i * 8 + x] = 200;
+
+        if (texture) glDeleteTextures(1, &texture);
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, atlasW, atlasH, 0, GL_RED, GL_UNSIGNED_BYTE, pixels.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        pixelH = 8.0f;
+        ready = true;
+        isTTF = false;
+        std::cout << "[Font] bitmap fallback\n";
+        return true;
+    }
+
+    bool initTTF()
+    {
+        const char* paths[] = {
+            "C:/SoftwareDevelopment/SimpleRenderer/assets/fonts/Inter-Regular.ttf",
+            "assets/fonts/Inter-Regular.ttf",
+            "../assets/fonts/Inter-Regular.ttf",
+            "../../assets/fonts/Inter-Regular.ttf",
+        };
+        FILE* f = nullptr;
+        const char* used = nullptr;
+        for (const char* p : paths)
+        {
+#if defined(_MSC_VER)
+            if (fopen_s(&f, p, "rb") == 0 && f) { used = p; break; }
+#else
+            f = fopen(p, "rb");
+            if (f) { used = p; break; }
+#endif
+        }
+        if (!f) return false;
+
+        fseek(f, 0, SEEK_END);
+        long sz = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        std::vector<unsigned char> ttf((size_t)sz);
+        fread(ttf.data(), 1, ttf.size(), f);
+        fclose(f);
+        std::cout << "[Font] Loading " << used << " (" << sz << " bytes)\n";
+
+        int offset = stbtt_GetFontOffsetForIndex(ttf.data(), 0);
+        if (offset < 0) return false;
+        stbtt_fontinfo info;
+        if (!stbtt_InitFont(&info, ttf.data(), offset)) return false;
+
+        atlasW = 1024; atlasH = 1024; pixelH = 28.0f;
+        std::vector<unsigned char> bitmap((size_t)atlasW * atlasH, 0);
+        int rows = stbtt_BakeFontBitmap(ttf.data(), offset, pixelH,
+            bitmap.data(), atlasW, atlasH, kFirst, kCount, chars);
+        if (rows <= 0) {
+            pixelH = 20.0f;
+            std::fill(bitmap.begin(), bitmap.end(), 0);
+            rows = stbtt_BakeFontBitmap(ttf.data(), offset, pixelH,
+                bitmap.data(), atlasW, atlasH, kFirst, kCount, chars);
+        }
+        if (rows <= 0) return false;
+
+        if (texture) glDeleteTextures(1, &texture);
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, atlasW, atlasH, 0, GL_RED, GL_UNSIGNED_BYTE, bitmap.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        ready = true;
+        isTTF = true;
+        std::cout << "[Font] Inter ready\n";
+        return true;
+    }
+}
+
+bool Font::init()
+{
+    if (font_impl::ready) return true;
+    if (font_impl::initTTF()) return true;
+    std::cerr << "[Font] TTF failed, using fallback\n";
+    return font_impl::initBitmapFallback();
+}
+
+void Font::shutdown()
+{
+    if (font_impl::texture) {
+        glDeleteTextures(1, &font_impl::texture);
+        font_impl::texture = 0;
+    }
+    font_impl::ready = false;
+}
+
+void Font::draw(UIContext& ctx, const glm::vec2& pos, const std::string& text,
+    const glm::vec4& color, float scale)
+{
+    if (!font_impl::ready || !font_impl::texture) return;
+
+    // Map engine "scale" so 1.0 ≈ 14px UI text
+    const float s = font_impl::isTTF ? scale * (14.0f / font_impl::pixelH) : scale;
+
+    if (!font_impl::isTTF)
+    {
+        float x = pos.x, y = pos.y;
+        float cw = 8.f * s, ch = 8.f * s;
+        float aw = (float)font_impl::atlasW;
+        for (unsigned char c : text) {
+            if (c == '\n') { x = pos.x; y += ch + 2; continue; }
+            if (c < 32 || c > 126) { x += cw; continue; }
+            int idx = c - 32;
+            float u0 = (idx * 8.f) / aw, u1 = ((idx + 1) * 8.f) / aw;
+            ctx.drawTexturedRect({ x, y }, { cw, ch }, color, font_impl::texture, { u0, 0 }, { u1, 1 });
+            x += cw;
+        }
+        return;
+    }
+
+    float x = 0.0f, y = 0.0f;
+    const float baseline = font_impl::pixelH * 0.80f;
+    for (unsigned char c : text)
+    {
+        if (c == '\n')
+        {
+            x = 0.0f;
+            y += font_impl::pixelH * 1.25f;
+            continue;
+        }
+        if (c < 32 || c > 126) continue;
+
+        stbtt_aligned_quad q;
+        float px = x, py = y;
+        stbtt_GetBakedQuad(font_impl::chars, font_impl::atlasW, font_impl::atlasH,
+            c - 32, &px, &py, &q, 1);
+
+        ctx.drawTexturedRect(
+            { pos.x + q.x0 * s, pos.y + (q.y0 + baseline) * s },
+            { (q.x1 - q.x0) * s, (q.y1 - q.y0) * s },
+            color, font_impl::texture,
+            { q.s0, q.t0 }, { q.s1, q.t1 });
+        x = px;
+        y = py;
+    }
+}
+
+float Font::getTextWidth(const std::string& text, float scale)
+{
+    if (!font_impl::ready || !font_impl::isTTF)
+        return (float)text.size() * 8.f * scale;
+
+    const float s = scale * (14.0f / font_impl::pixelH);
+    float x = 0, y = 0, maxX = 0;
+    for (unsigned char c : text)
+    {
+        if (c == '\n') { maxX = std::max(maxX, x); x = 0; continue; }
+        if (c < 32 || c > 126) continue;
+        stbtt_aligned_quad q;
+        stbtt_GetBakedQuad(font_impl::chars, font_impl::atlasW, font_impl::atlasH,
+            c - 32, &x, &y, &q, 1);
+    }
+    return std::max(maxX, x) * s;
+}
+
+float Font::getLineHeight(float scale)
+{
+    if (!font_impl::isTTF)
+        return 8.f * scale;
+    return 14.0f * 1.25f * scale; // matches normalized draw size
 }

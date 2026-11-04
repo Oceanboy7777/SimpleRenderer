@@ -215,6 +215,12 @@ void ContentBrowserPanel::update(UIContext& ctx, float deltaTime)
 {
     Panel::update(ctx, deltaTime);
     engineFilesCheckbox.update(ctx, deltaTime);
+    gridScroll.update(ctx, deltaTime);
+}
+
+void ContentBrowserPanel::onScroll(float yOffset)
+{
+    gridScroll.onScroll(yOffset);
 }
 
 void ContentBrowserPanel::draw(UIContext& ctx)
@@ -255,6 +261,11 @@ void ContentBrowserPanel::draw(UIContext& ctx)
     drawBtn(270.0f, "Up", Hit::Type::Up);
     drawBtn(380.0f, "New Folder", Hit::Type::NewFolder);
     drawBtn(520.0f, "Import", Hit::Type::Import);
+
+    // Scrollable grid area
+    const float gridTop = 56.0f;
+    gridScroll.setPosition(wp + glm::vec2(8.0f, gridTop));
+    gridScroll.setSize({ size.x - 16.0f, size.y - gridTop - 8.0f });
 
     float x = 14.0f;
     float y = 72.0f;

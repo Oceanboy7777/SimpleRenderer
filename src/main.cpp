@@ -20,6 +20,7 @@
 #include "editor/SceneDialog.hpp"
 #include "editor/TransformToolbar.hpp"
 #include "editor/PlayToolbar.hpp"
+#include "editor/UIDesignerPanel.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -29,6 +30,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <vector>
 #include <memory>
 
 namespace
@@ -40,11 +42,13 @@ namespace
     HierarchyPanel* g_hierarchy = nullptr;
     InspectorPanel* g_inspector = nullptr;
     ContentBrowserPanel* g_content = nullptr;
+    UIDesignerPanel* g_uiDesigner = nullptr;
 
     enum class AppMode
     {
         Launcher,
-        Editor
+        Editor,
+        UIDesigner
     };
 
     enum class ResizeEdge
@@ -439,8 +443,15 @@ namespace
 
     void scrollCallback(GLFWwindow* window, double /*xOffset*/, double yOffset)
     {
+        if (g_uiDesigner && g_uiDesigner->isVisible())
+        {
+            g_uiDesigner->onScroll(static_cast<float>(yOffset));
+            return;
+        }
         if (g_hierarchy)
             g_hierarchy->onScroll(static_cast<float>(yOffset));
+        if (g_content)
+            g_content->onScroll(static_cast<float>(yOffset));
 
         if (g_ui && g_ui->isMouseOverUI())
             return;
@@ -452,6 +463,11 @@ namespace
 
     void keyCallback(GLFWwindow* window, int key, int /*scancode*/, int action, int /*mods*/)
     {
+        if (g_uiDesigner && g_uiDesigner->isVisible())
+        {
+            g_uiDesigner->onKey(key, action);
+            return;
+        }
         if (g_hierarchy)
             g_hierarchy->onKey(key, action);
         if (g_inspector)
@@ -515,6 +531,11 @@ namespace
 
     void charCallback(GLFWwindow* /*window*/, unsigned int codepoint)
     {
+        if (g_uiDesigner && g_uiDesigner->isVisible())
+        {
+            g_uiDesigner->onChar(codepoint);
+            return;
+        }
         if (g_hierarchy)
             g_hierarchy->onChar(codepoint);
         if (g_inspector)
@@ -573,11 +594,13 @@ namespace
         const float rightW = input.rightW;
         const float bottomH = input.bottomH;
 
-        hierarchy->setPosition({ 0.0f, 0.0f });
-        hierarchy->setSize({ leftW, h - bottomH });
+        constexpr float tabBarH = 28.0f;
 
-        inspector->setPosition({ w - rightW, 0.0f });
-        inspector->setSize({ rightW, h - bottomH });
+        hierarchy->setPosition({ 0.0f, tabBarH });
+        hierarchy->setSize({ leftW, h - bottomH - tabBarH });
+
+        inspector->setPosition({ w - rightW, tabBarH });
+        inspector->setSize({ rightW, h - bottomH - tabBarH });
 
         content->setPosition({ 0.0f, h - bottomH });
         content->setSize({ w, bottomH });
@@ -585,10 +608,10 @@ namespace
         dialog->setPosition({ w * 0.5f - 300.0f, h * 0.5f - 180.0f });
         dialog->setSize({ 600.0f, 360.0f });
 
-        transformTb->setPosition({ w - rightW - 168.0f - 8.0f, 8.0f });
+        transformTb->setPosition({ w - rightW - 168.0f - 8.0f, tabBarH + 8.0f });
         transformTb->setSize({ 168.0f, 36.0f });
 
-        playTb->setPosition({ w * 0.5f - 70.0f, 8.0f });
+        playTb->setPosition({ w * 0.5f - 70.0f, tabBarH + 8.0f });
         playTb->setSize({ 140.0f, 36.0f });
     }
 }
@@ -660,6 +683,11 @@ int main()
     auto playToolbar = std::make_unique<PlayToolbar>();
     playToolbar->setVisible(false);
 
+    auto uiDesigner = std::make_unique<UIDesignerPanel>();
+    uiDesigner->setVisible(false);   // must start hidden
+    UIDesignerPanel* uiDesignerPtr = uiDesigner.get();
+    g_uiDesigner = uiDesignerPtr;
+
     HierarchyPanel* hierarchyPtr = hierarchy.get();
     InspectorPanel* inspectorPtr = inspector.get();
     ContentBrowserPanel* contentPtr = contentBrowser.get();
@@ -672,12 +700,57 @@ int main()
     g_content = contentPtr;
     hierarchyPtr->setSceneDialog(dialogPtr);
 
+    hierarchyPtr->setOnOpenUIDesigner([&](std::uint64_t rootId)
+        {
+            mode = AppMode::UIDesigner;
+            uiDesignerPtr->setScene(&scene);
+            uiDesignerPtr->setUIRootId(rootId);
+            uiDesignerPtr->setVisible(true);
+
+            hierarchyPtr->setVisible(false);
+            inspectorPtr->setVisible(false);
+            contentPtr->setVisible(false);
+            transformTb->setVisible(false);
+            playTb->setVisible(false);
+            launcherPtr->setVisible(false);
+
+            uiDesignerPtr->setOnSave([&]()
+                {
+                    const auto path = hierarchyPtr->getCurrentScenePath();
+                    if (!path.empty())
+                    {
+                        SceneSerializer::save(scene, path.string());
+                        std::cout << "UI Designer: saved scene\n";
+                    }
+                });
+            uiDesignerPtr->setContentBrowser(contentPtr);
+            uiDesignerPtr->setOnClose([&]()
+                {
+                    // Close removes this UI root from the scene (and thus from the tab bar)
+                    const std::uint64_t rid = uiDesignerPtr->getUIRootId();
+                    if (rid != 0)
+                        scene.removeObject(rid);
+
+                    mode = AppMode::Editor;
+                    uiDesignerPtr->setVisible(false);
+                    hierarchyPtr->setVisible(true);
+                    inspectorPtr->setVisible(true);
+                    contentPtr->setVisible(true);
+                    transformTb->setVisible(true);
+                    playTb->setVisible(true);
+                    glfwSetWindowTitle(window, "SimpleRenderer - Editor");
+                });
+
+            glfwSetWindowTitle(window, "SimpleRenderer - UI Designer");
+        });
+
     ui.getRoot().addChild(std::move(hierarchy));
     ui.getRoot().addChild(std::move(inspector));
     ui.getRoot().addChild(std::move(contentBrowser));
     ui.getRoot().addChild(std::move(sceneDialog));
     ui.getRoot().addChild(std::move(transformToolbar));
     ui.getRoot().addChild(std::move(playToolbar));
+    ui.getRoot().addChild(std::move(uiDesigner));
 
     InputState input;
     input.camera = &camera;
@@ -760,13 +833,104 @@ int main()
 
         if (mode == AppMode::Launcher)
         {
+            // Ensure designer stays hidden on launcher
+            if (uiDesignerPtr) uiDesignerPtr->setVisible(false);
+
+            launcherPtr->setVisible(true);
             launcherPtr->setSize({ static_cast<float>(width), static_cast<float>(height) });
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             ui.beginFrame(dt);
             ui.endFrame();
         }
+        else if (mode == AppMode::UIDesigner)
+        {
+            constexpr float tabBarH = 28.0f;
+            const float w = static_cast<float>(width);
+            const float h = static_cast<float>(height);
+
+            launcherPtr->setVisible(false);
+            hierarchyPtr->setVisible(false);
+            inspectorPtr->setVisible(false);
+            transformTb->setVisible(false);
+            playTb->setVisible(false);
+
+            // Designer fills under the tab bar; content browser is laid out by designer
+            uiDesignerPtr->setPosition({ 0.0f, tabBarH });
+            uiDesignerPtr->setSize({ w, h - tabBarH });
+            uiDesignerPtr->setVisible(true);
+            uiDesignerPtr->setContentBrowser(contentPtr);
+
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            ui.beginFrame(dt);
+
+            // Tab bar always visible
+            {
+                ui.drawRect({ 0.0f, 0.0f }, { w, tabBarH }, glm::vec4(0.11f, 0.12f, 0.15f, 1.0f));
+                struct TabHit { std::uint64_t id; float x0, x1; };
+                static std::vector<TabHit> tabHits;
+                tabHits.clear();
+                float tx = 6.0f;
+                auto drawTab = [&](const std::string& label, bool active, std::uint64_t id)
+                    {
+                        const float pad = 14.0f;
+                        const float tw = Font::getTextWidth(label, 1.15f) + pad * 2.0f;
+                        glm::vec2 tp = { tx, 2.0f };
+                        glm::vec2 ts = { tw, tabBarH - 4.0f };
+                        ui.drawRect(tp, ts, active ? glm::vec4(0.22f, 0.38f, 0.72f, 1.0f)
+                            : glm::vec4(0.16f, 0.17f, 0.21f, 1.0f));
+                        Font::draw(ui, tp + glm::vec2(pad, 6.0f), label, glm::vec4(0.95f), 1.15f);
+                        tabHits.push_back({ id, tx, tx + tw });
+                        tx += tw + 4.0f;
+                    };
+                drawTab("Main Engine", false, 0);
+                for (const auto& op : scene.getObjects())
+                {
+                    if (op->isUIRoot())
+                        drawTab(op->getName(), op->getId() == uiDesignerPtr->getUIRootId(), op->getId());
+                }
+
+                static bool wasDown = false;
+                const bool down = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+                if (down && !wasDown)
+                {
+                    double mx = 0.0, my = 0.0;
+                    glfwGetCursorPos(window, &mx, &my);
+                    if (my >= 0.0 && my <= tabBarH)
+                    {
+                        for (const auto& tab : tabHits)
+                        {
+                            if (mx >= tab.x0 && mx <= tab.x1)
+                            {
+                                if (tab.id == 0)
+                                {
+                                    mode = AppMode::Editor;
+                                    uiDesignerPtr->setVisible(false);
+                                    hierarchyPtr->setVisible(true);
+                                    inspectorPtr->setVisible(true);
+                                    contentPtr->setVisible(true);
+                                    transformTb->setVisible(true);
+                                    playTb->setVisible(true);
+                                    glfwSetWindowTitle(window, "SimpleRenderer - Editor");
+                                }
+                                else if (tab.id != uiDesignerPtr->getUIRootId())
+                                {
+                                    uiDesignerPtr->setUIRootId(tab.id);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                wasDown = down;
+            }
+
+            ui.endFrame();
+        }
         else
         {
+            // Editor mode — keep designer hidden
+            if (uiDesignerPtr) uiDesignerPtr->setVisible(false);
+
             const bool altDown =
                 glfwGetKey(window, GLFW_KEY_LEFT_ALT) == GLFW_PRESS ||
                 glfwGetKey(window, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS;
@@ -826,7 +990,106 @@ int main()
             if (editMode)
                 inspectorPtr->setSelectedId(hierarchyPtr->getSelectedId());
 
+            // ---- Top tab bar: Main Engine + one tab per UI root ----
+            struct TabHit { std::uint64_t id; float x0, x1; }; // id==0 => Main Engine
+            static std::vector<TabHit> tabHits;
+            tabHits.clear();
+
             ui.beginFrame(dt);
+
+            {
+                const float tabBarH = 28.0f;
+                const float w = static_cast<float>(width);
+                ui.drawRect({ 0.0f, 0.0f }, { w, tabBarH }, glm::vec4(0.11f, 0.12f, 0.15f, 1.0f));
+
+                float tx = 6.0f;
+                auto drawTab = [&](const std::string& label, bool active, std::uint64_t id)
+                    {
+                        const float pad = 14.0f;
+                        const float tw = Font::getTextWidth(label, 1.15f) + pad * 2.0f;
+                        const float th = tabBarH - 4.0f;
+                        glm::vec2 tp = { tx, 2.0f };
+                        glm::vec2 ts = { tw, th };
+                        if (active)
+                            ui.drawRect(tp, ts, glm::vec4(0.22f, 0.38f, 0.72f, 1.0f));
+                        else
+                            ui.drawRect(tp, ts, glm::vec4(0.16f, 0.17f, 0.21f, 1.0f));
+                        Font::draw(ui, tp + glm::vec2(pad, 6.0f), label, glm::vec4(0.95f), 1.15f);
+                        tabHits.push_back({ id, tx, tx + tw });
+                        tx += tw + 4.0f;
+                    };
+
+                drawTab("Main Engine", true, 0); // currently in editor = main active
+
+                if (input.scene)
+                {
+                    for (const auto& op : input.scene->getObjects())
+                    {
+                        if (op->isUIRoot())
+                            drawTab(op->getName(), false, op->getId());
+                    }
+                }
+
+                // Click handling for tabs (poll left mouse just pressed)
+                static bool wasDown = false;
+                const bool down = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+                if (down && !wasDown)
+                {
+                    double mx = 0.0, my = 0.0;
+                    glfwGetCursorPos(window, &mx, &my);
+                    if (my >= 0.0 && my <= tabBarH)
+                    {
+                        for (const auto& t : tabHits)
+                        {
+                            if (mx >= t.x0 && mx <= t.x1)
+                            {
+                                if (t.id == 0)
+                                {
+                                    // already on main engine
+                                }
+                                else
+                                {
+                                    // open that UI root in designer
+                                    mode = AppMode::UIDesigner;
+                                    uiDesignerPtr->setScene(&scene);
+                                    uiDesignerPtr->setUIRootId(t.id);
+                                    uiDesignerPtr->setVisible(true);
+                                    hierarchyPtr->setVisible(false);
+                                    inspectorPtr->setVisible(false);
+                                    contentPtr->setVisible(false);
+                                    transformTb->setVisible(false);
+                                    playTb->setVisible(false);
+                                    uiDesignerPtr->setContentBrowser(contentPtr);
+                                    uiDesignerPtr->setOnSave([&]()
+                                        {
+                                            const auto path = hierarchyPtr->getCurrentScenePath();
+                                            if (!path.empty())
+                                                SceneSerializer::save(scene, path.string());
+                                        });
+                                    uiDesignerPtr->setOnClose([&]()
+                                        {
+                                            const std::uint64_t rid = uiDesignerPtr->getUIRootId();
+                                            if (rid != 0)
+                                                scene.removeObject(rid);
+                                            mode = AppMode::Editor;
+                                            uiDesignerPtr->setVisible(false);
+                                            hierarchyPtr->setVisible(true);
+                                            inspectorPtr->setVisible(true);
+                                            contentPtr->setVisible(true);
+                                            transformTb->setVisible(true);
+                                            playTb->setVisible(true);
+                                            glfwSetWindowTitle(window, "SimpleRenderer - Editor");
+                                        });
+                                    glfwSetWindowTitle(window, "SimpleRenderer - UI Designer");
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                wasDown = down;
+            }
+
             ui.endFrame();
         }
 

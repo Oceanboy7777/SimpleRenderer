@@ -61,6 +61,7 @@ void HierarchyPanel::setSceneDialog(SceneDialog* dialog) { sceneDialog = dialog;
 void HierarchyPanel::setCurrentScenePath(const std::filesystem::path& path) { currentScenePath = path; }
 std::filesystem::path HierarchyPanel::getCurrentScenePath() const { return currentScenePath; }
 void HierarchyPanel::setSelectedId(std::uint64_t id) { selectedId = id; }
+void HierarchyPanel::setOnOpenUIDesigner(std::function<void(std::uint64_t)> cb) { onOpenUIDesigner = std::move(cb); }
 std::uint64_t HierarchyPanel::getSelectedId() const { return selectedId; }
 
 void HierarchyPanel::update(UIContext& ctx, float deltaTime)
@@ -77,7 +78,7 @@ void HierarchyPanel::createStaticMesh(MeshType type, const std::string& name)
     const float offset = static_cast<float>(counter) * 0.55f;
 
     GameObject& obj = scene->createObject(
-        name + " " + std::to_string(counter),
+        name,
         glm::vec3(offset, 0.5f, offset * 0.25f),
         glm::vec3(0.7f),
         glm::vec3(0.45f + (counter % 5) * 0.08f, 0.65f, 0.85f),
@@ -92,11 +93,21 @@ void HierarchyPanel::createStaticMesh(MeshType type, const std::string& name)
     createMenuCategory = -1;
 }
 
+void HierarchyPanel::createNewUserInterface()
+{
+    if (!scene) return;
+    GameObject& obj = scene->createUIObject("New User Interface", UIType::UIRoot, 0);
+    selectedId = obj.getId();
+    createMenuOpen = false;
+    staticMeshMenuOpen = false;
+    createMenuCategory = -1;
+}
+
+
 void HierarchyPanel::deleteSelected()
 {
     if (!scene || selectedId == 0) return;
     GameObject* obj = scene->findObjectById(selectedId);
-    if (obj && obj->getName() == "Ground") return;
 
     if (scene->removeObject(selectedId))
     {
@@ -130,10 +141,16 @@ void HierarchyPanel::beginRename()
 
 void HierarchyPanel::commitRename()
 {
-    if (!renaming || !scene) return;
-    GameObject* obj = scene->findObjectById(renameId);
-    if (obj && !renameBuffer.empty())
-        obj->setName(renameBuffer);
+    if (!scene || renameId == 0) return;
+    if (!renameBuffer.empty())
+    {
+        if (!scene->tryRename(renameId, renameBuffer))
+        {
+            // name taken – keep editing / or just reject
+            std::cout << "Name already in use: " << renameBuffer << "\n";
+            return;
+        }
+    }
     renaming = false;
     renameId = 0;
     renameBuffer.clear();
@@ -284,6 +301,7 @@ void HierarchyPanel::draw(UIContext& ctx)
             for (const auto& objPtr : scene->getObjects())
             {
                 const GameObject& obj = *objPtr;
+                if (obj.isUI()) continue; // UI objects live under User Interface category
 
                 if (!searchFilter.empty())
                 {
@@ -318,9 +336,73 @@ void HierarchyPanel::draw(UIContext& ctx)
                         label = renameBuffer + "_";
 
                     Font::draw(ctx, oPos + glm::vec2(kPadX, kPadY), label, glm::vec4(0.95f), 1.25f);
-                    itemRects.push_back({ obj.getId(), oPos, oSize, false, -1 });
+                    itemRects.push_back({ obj.getId(), oPos, oSize, false, -1, false });
                 }
                 localY += kRowH + 4.0f;
+            }
+        }
+        else if (c == static_cast<int>(Category::UserInterface) && scene)
+        {
+            bool any = false;
+            for (const auto& objPtr : scene->getObjects())
+            {
+                const GameObject& obj = *objPtr;
+                if (!obj.isUIRoot()) continue;
+
+                if (!searchFilter.empty())
+                {
+                    std::string lowerName = obj.getName();
+                    std::string lowerFilter = searchFilter;
+                    for (char& ch : lowerName)
+                        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    for (char& ch : lowerFilter)
+                        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+                    if (lowerName.find(lowerFilter) == std::string::npos)
+                        continue;
+                }
+
+                any = true;
+                const float oy = listScroll.contentToWorldY(localY);
+                glm::vec2 oPos = { listScroll.getWorldPosition().x + 16.0f, oy };
+                glm::vec2 oSize = { listScroll.getSize().x - 24.0f, kRowH };
+
+                if (oy + kRowH >= ly && oy <= lb)
+                {
+                    const bool isSelected = (obj.getId() == selectedId);
+                    const bool isHovered = (obj.getId() == hoveredId);
+                    if (isSelected)
+                        ctx.drawRect(oPos, oSize, glm::vec4(0.22f, 0.38f, 0.72f, 0.95f));
+                    else if (isHovered)
+                        ctx.drawRect(oPos, oSize, glm::vec4(0.22f, 0.24f, 0.30f, 0.9f));
+                    else
+                        ctx.drawRect(oPos, oSize, glm::vec4(0.14f, 0.15f, 0.18f, 0.7f));
+
+                    std::string label = obj.getName();
+                    if (renaming && renameId == obj.getId())
+                        label = renameBuffer + "_";
+
+                    Font::draw(ctx, oPos + glm::vec2(kPadX, kPadY), label, glm::vec4(0.95f), 1.25f);
+                    itemRects.push_back({ obj.getId(), oPos, oSize, false, -1, true });
+
+                    // small "Edit" button to open UI Designer
+                    glm::vec2 editSize = { 40.0f, 20.0f };
+                    glm::vec2 editPos = { oPos.x + oSize.x - editSize.x - 4.0f, oPos.y + 5.0f };
+                    ctx.drawRect(editPos, editSize, glm::vec4(0.25f, 0.45f, 0.70f, 1.0f));
+                    Font::draw(ctx, editPos + glm::vec2(6.0f, 3.0f), "Edit", glm::vec4(1.0f), 1.1f);
+                    actionHits.push_back({ ActionHit::Type::OpenUIDesigner, editPos, editSize, -1, obj.getId() });
+                }
+                localY += kRowH + 4.0f;
+            }
+            if (!any)
+            {
+                const float ey = listScroll.contentToWorldY(localY);
+                if (ey + kRowH >= ly && ey <= lb)
+                {
+                    Font::draw(ctx,
+                        glm::vec2(listScroll.getWorldPosition().x + 20.0f, ey + kPadY),
+                        "(empty)", glm::vec4(0.45f), 1.15f);
+                }
+                localY += kRowH;
             }
         }
         else
@@ -355,7 +437,17 @@ void HierarchyPanel::draw(UIContext& ctx)
 
         ctx.drawRect(menuPos, menuSize, glm::vec4(0.16f, 0.17f, 0.22f, 0.98f));
 
-        if (!gamespace)
+        if (createMenuCategory == static_cast<int>(Category::UserInterface))
+        {
+            glm::vec2 btnPos = menuPos + glm::vec2(8.0f, 8.0f);
+            glm::vec2 btnSize = { 154.0f, 28.0f };
+            ctx.drawRect(btnPos, btnSize, glm::vec4(0.22f, 0.40f, 0.55f, 1.0f));
+            Font::draw(ctx, btnPos + glm::vec2(10.0f, 7.0f), "New User Interface", glm::vec4(1.0f), 1.2f);
+            actionHits.push_back({ ActionHit::Type::CreateNewUserInterface, btnPos, btnSize, -1, 0 });
+            menuSize.y = 44.0f;
+            lastCreateMenuSize = menuSize;
+        }
+        else if (!gamespace)
         {
             Font::draw(ctx, menuPos + glm::vec2(12.0f, 14.0f),
                 "(nothing yet)", glm::vec4(0.6f), 1.2f);
@@ -479,6 +571,11 @@ bool HierarchyPanel::onMouseButton(int button, int action, const glm::vec2& worl
             saveScene(); return true;
         case ActionHit::Type::LoadScene:
             loadScene(); return true;
+        case ActionHit::Type::CreateNewUserInterface:
+            createNewUserInterface(); return true;
+        case ActionHit::Type::OpenUIDesigner:
+            if (onOpenUIDesigner) onOpenUIDesigner(hit.targetId);
+            return true;
         }
     }
 

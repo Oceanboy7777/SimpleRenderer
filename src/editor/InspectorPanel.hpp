@@ -2,6 +2,8 @@
 
 #include "ui/Panel.hpp"
 #include "ui/TextBox.hpp"
+#include "ui/ScrollFrame.hpp"
+#include "ui/Checkbox.hpp"
 #include "engine/Scene.hpp"
 #include "engine/GameObject.hpp"
 
@@ -51,6 +53,13 @@ private:
     TextBox fields[static_cast<int>(Field::Count)];
     std::vector<PathHit> meshHits;
     std::vector<PathHit> textureHits;
+    ScrollFrame bodyScroll;
+    TextBox meshSearchBox;
+    std::string meshSearchFilter;
+    Checkbox visibleCheckbox;
+    bool showTextureSection = false; // disabled for now
+    struct BoolHit { glm::vec2 pos; glm::vec2 size; bool isVisibleToggle = false; };
+    std::vector<BoolHit> uiHits;
 
     void setupFields();
     void syncFieldsFromObject();

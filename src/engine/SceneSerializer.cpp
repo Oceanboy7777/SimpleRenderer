@@ -46,7 +46,7 @@ bool SceneSerializer::save(const Scene& scene, const std::string& path)
         return false;
     }
 
-    file << "# SimpleRenderer scene v1\n";
+    file << "# SimpleRenderer scene v2\n";
 
     for (const auto& obj : scene.getObjects())
     {
@@ -55,13 +55,21 @@ bool SceneSerializer::save(const Scene& scene, const std::string& path)
         const glm::vec3 c = obj->getColor();
         const int mesh = static_cast<int>(obj->getMeshType());
         const int mat = static_cast<int>(obj->getMaterialType());
+        const int ui = static_cast<int>(obj->getUIType());
+        const int vis = obj->isVisible() ? 1 : 0;
+        const int zo = obj->getZOrder();
+        const glm::vec2 us = obj->getUISize();
 
         file << "object \"" << obj->getName() << "\" "
             << p.x << ' ' << p.y << ' ' << p.z << ' '
             << s.x << ' ' << s.y << ' ' << s.z << ' '
             << c.r << ' ' << c.g << ' ' << c.b << ' '
             << mesh << ' ' << mat
-            << " \"" << obj->getMeshPath() << "\"\n";
+            << " \"" << obj->getMeshPath() << "\""
+            << " " << ui << " " << vis << " " << zo
+            << " " << us.x << " " << us.y
+            << " " << obj->getParentId()
+            << " \"" << obj->getText() << "\"\n";
     }
 
     file.flush();
@@ -130,6 +138,19 @@ bool SceneSerializer::load(Scene& scene, const std::string& path)
             std::getline(ss, meshPath, '"');
         }
 
+        int ui = 0, vis = 1, zo = 0;
+        float usx = 120.0f, usy = 40.0f;
+        std::uint64_t parentId = 0;
+        ss >> ui >> vis >> zo >> usx >> usy >> parentId;
+
+        ss >> std::ws;
+        std::string textContent;
+        if (ss.peek() == '"')
+        {
+            ss.get();
+            std::getline(ss, textContent, '"');
+        }
+
         MeshType meshType = MeshType::Cube;
         if (mesh == static_cast<int>(MeshType::Plane))
             meshType = MeshType::Plane;
@@ -140,19 +161,41 @@ bool SceneSerializer::load(Scene& scene, const std::string& path)
         if (mat == static_cast<int>(MaterialType::Ground))
             matType = MaterialType::Ground;
 
-        GameObject& created = scene.createObject(
-            name,
-            glm::vec3(px, py, pz),
-            glm::vec3(sx, sy, sz),
-            glm::vec3(cr, cg, cb),
-            0.0f,
-            meshType,
-            matType
-        );
+        UIType uiType = static_cast<UIType>(ui);
 
-        if (!meshPath.empty())
-            created.setMeshPath(meshPath);
+        GameObject* createdPtr = nullptr;
+        if (uiType != UIType::None)
+        {
+            GameObject& created = scene.createUIObject(name, uiType, parentId);
+            created.getTransform().setPosition(glm::vec3(px, py, pz));
+            created.getTransform().setScale(glm::vec3(sx, sy, sz));
+            created.setColor(glm::vec3(cr, cg, cb));
+            created.setVisible(vis != 0);
+            created.setZOrder(zo);
+            created.setUISize({ usx, usy });
+            created.setText(textContent);
+            // Force exact name if unique system changed it
+            scene.tryRename(created.getId(), name);
+            createdPtr = &created;
+        }
+        else
+        {
+            GameObject& created = scene.createObject(
+                name,
+                glm::vec3(px, py, pz),
+                glm::vec3(sx, sy, sz),
+                glm::vec3(cr, cg, cb),
+                0.0f,
+                meshType,
+                matType
+            );
+            if (!meshPath.empty())
+                created.setMeshPath(meshPath);
+            created.setVisible(vis != 0);
+            createdPtr = &created;
+        }
 
+        (void)createdPtr;
         ++loaded;
     }
 

@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "GameObject.hpp"
@@ -25,6 +24,13 @@ public:
         MaterialType materialType = MaterialType::Default
     );
 
+    // Creates a UI root ("New User Interface") or UI element. Name is forced unique.
+    GameObject& createUIObject(
+        const std::string& desiredName,
+        UIType type,
+        std::uint64_t parentId = 0
+    );
+
     GameObject* findObjectById(std::uint64_t id);
     const GameObject* findObjectById(std::uint64_t id) const;
 
@@ -41,6 +47,13 @@ public:
 
     const std::vector<std::unique_ptr<GameObject>>&
         getObjects() const;
+
+    // Unique name helpers (apply to ALL game objects)
+    bool isNameTaken(const std::string& name, std::uint64_t excludeId = 0) const;
+    std::string makeUniqueName(const std::string& base) const;
+
+    // Returns true if rename succeeded (name was free or already owned by this id)
+    bool tryRename(std::uint64_t id, const std::string& newName);
 
 private:
     glm::mat4 getWorldMatrixRecursive(

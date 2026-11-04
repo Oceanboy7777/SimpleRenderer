@@ -1,70 +1,49 @@
-
 #include "Scene.hpp"
 
 #include <algorithm>
 #include <memory>
 #include <utility>
+#include <cctype>
 
 Scene::Scene()
     : nextObjectId(1)
 {
-    // Ground plane with its own material.
-    createObject(
-        "Ground",
-        glm::vec3(0.0f, -1.02f, 0.0f),
-        glm::vec3(24.0f, 1.0f, 24.0f),
-        glm::vec3(0.75f, 0.85f, 0.75f),
-        0.0f,
-        MeshType::Plane,
-        MaterialType::Ground
-    );
+    // Empty scene on project/creation — no default objects.
+}
 
-    // Central cube.
-    createObject(
-        "Central Cube",
-        glm::vec3(0.0f, 0.0f, 0.0f),
-        glm::vec3(1.0f),
-        glm::vec3(0.9f, 0.2f, 0.2f),
-        0.7f
-    );
+bool Scene::isNameTaken(const std::string& name, std::uint64_t excludeId) const
+{
+    for (const auto& obj : objects)
+    {
+        if (obj->getId() == excludeId) continue;
+        if (obj->getName() == name) return true;
+    }
+    return false;
+}
 
-    // Left cube.
-    createObject(
-        "Left Cube",
-        glm::vec3(-2.5f, 0.0f, 0.0f),
-        glm::vec3(0.65f),
-        glm::vec3(0.2f, 0.7f, 1.0f),
-        -0.9f
-    );
+std::string Scene::makeUniqueName(const std::string& base) const
+{
+    if (!isNameTaken(base))
+        return base;
 
-    // Right cube.
-    createObject(
-        "Right Cube",
-        glm::vec3(2.5f, 0.0f, 0.0f),
-        glm::vec3(0.65f),
-        glm::vec3(0.3f, 1.0f, 0.4f),
-        1.1f
-    );
+    int counter = 1;
+    while (true)
+    {
+        std::string candidate = base + " " + std::to_string(counter);
+        if (!isNameTaken(candidate))
+            return candidate;
+        ++counter;
+    }
+}
 
-    // Floating cube behind the central cube.
-    createObject(
-        "Floating Cube",
-        glm::vec3(0.0f, 2.0f, -2.0f),
-        glm::vec3(0.45f),
-        glm::vec3(0.9f, 0.7f, 0.2f),
-        1.4f
-    );
-
-    // Imported OBJ model to verify the Milestone 7 model pipeline.
-    createObject(
-        "Imported Pyramid",
-        glm::vec3(3.2f, 0.0f, -2.5f),
-        glm::vec3(0.8f),
-        glm::vec3(0.85f, 0.65f, 1.0f),
-        0.35f,
-        MeshType::ImportedModel
-    );
-
+bool Scene::tryRename(std::uint64_t id, const std::string& newName)
+{
+    if (newName.empty()) return false;
+    GameObject* obj = findObjectById(id);
+    if (!obj) return false;
+    if (isNameTaken(newName, id)) return false;
+    obj->setName(newName);
+    return true;
 }
 
 GameObject& Scene::createObject(
@@ -78,10 +57,11 @@ GameObject& Scene::createObject(
 )
 {
     const std::uint64_t id = nextObjectId++;
+    std::string unique = makeUniqueName(name);
 
     auto object = std::make_unique<GameObject>(
         id,
-        name,
+        unique,
         position,
         scale,
         color,
@@ -91,122 +71,89 @@ GameObject& Scene::createObject(
     );
 
     GameObject& reference = *object;
-
     objects.push_back(std::move(object));
+    return reference;
+}
 
+GameObject& Scene::createUIObject(
+    const std::string& desiredName,
+    UIType type,
+    std::uint64_t parentId
+)
+{
+    const std::uint64_t id = nextObjectId++;
+    std::string unique = makeUniqueName(desiredName);
 
+    // UI objects live at origin; their "transform" is used for 2D placement in designer
+    auto object = std::make_unique<GameObject>(
+        id,
+        unique,
+        glm::vec3(0.0f),
+        glm::vec3(1.0f),
+        glm::vec3(0.9f, 0.9f, 0.95f),
+        0.0f,
+        MeshType::Cube,
+        MaterialType::Default
+    );
+
+    object->setUIType(type);
+    object->setParentId(parentId);
+    object->setVisible(true);
+    object->setZOrder(0);
+
+    if (type == UIType::Text || type == UIType::Button || type == UIType::TextBox)
+        object->setText(unique);
+    else
+        object->setText("");
+
+    // Default sizes per type
+    switch (type)
+    {
+    case UIType::Text:        object->setUISize({ 160.0f, 28.0f }); break;
+    case UIType::TextBox:     object->setUISize({ 180.0f, 32.0f }); break;
+    case UIType::Button:      object->setUISize({ 140.0f, 36.0f }); break;
+    case UIType::CheckBox:    object->setUISize({ 120.0f, 28.0f }); break;
+    case UIType::Frame:       object->setUISize({ 220.0f, 140.0f }); break;
+    case UIType::ScrollFrame: object->setUISize({ 240.0f, 160.0f }); break;
+    case UIType::UIRoot:      object->setUISize({ 0.0f, 0.0f }); break;
+    default: break;
+    }
+
+    GameObject& reference = *object;
+    objects.push_back(std::move(object));
     return reference;
 }
 
 GameObject* Scene::findObjectById(std::uint64_t id)
 {
-    for (const auto& object : objects)
-    {
-        if (object->getId() == id)
-        {
-            return object.get();
-        }
-    }
-
+    for (auto& obj : objects)
+        if (obj->getId() == id) return obj.get();
     return nullptr;
 }
 
-const GameObject* Scene::findObjectById(
-    std::uint64_t id
-) const
+const GameObject* Scene::findObjectById(std::uint64_t id) const
 {
-    for (const auto& object : objects)
-    {
-        if (object->getId() == id)
-        {
-            return object.get();
-        }
-    }
-
+    for (const auto& obj : objects)
+        if (obj->getId() == id) return obj.get();
     return nullptr;
 }
 
 bool Scene::removeObject(std::uint64_t id)
 {
-    const auto iterator = std::find_if(
-        objects.begin(),
-        objects.end(),
-        [id](const std::unique_ptr<GameObject>& object)
-        {
-            return object->getId() == id;
-        }
-    );
-
-    if (iterator == objects.end())
-    {
-        return false;
-    }
-
-    // Detach direct children before removing the parent.
-    for (const auto& object : objects)
-    {
-        if (object->getParentId() == id)
-        {
-            object->setParentId(0);
-        }
-    }
-
-    objects.erase(iterator);
-
+    auto it = std::find_if(objects.begin(), objects.end(),
+        [id](const std::unique_ptr<GameObject>& o) { return o->getId() == id; });
+    if (it == objects.end()) return false;
+    objects.erase(it);
     return true;
 }
 
-bool Scene::setParent(
-    std::uint64_t childId,
-    std::uint64_t parentId
-)
+bool Scene::setParent(std::uint64_t childId, std::uint64_t parentId)
 {
     GameObject* child = findObjectById(childId);
-
-    if (child == nullptr)
-    {
-        return false;
-    }
-
-    if (parentId == 0)
-    {
-        child->setParentId(0);
-        return true;
-    }
-
-    GameObject* parent = findObjectById(parentId);
-
-    if (parent == nullptr || childId == parentId)
-    {
-        return false;
-    }
-
-    std::uint64_t currentId = parentId;
-
-    for (std::size_t depth = 0; depth <= objects.size(); ++depth)
-    {
-        if (currentId == childId)
-        {
-            return false;
-        }
-
-        const GameObject* current = findObjectById(currentId);
-
-        if (current == nullptr)
-        {
-            return false;
-        }
-
-        currentId = current->getParentId();
-
-        if (currentId == 0)
-        {
-            child->setParentId(parentId);
-            return true;
-        }
-    }
-
-    return false;
+    if (!child) return false;
+    if (parentId != 0 && !findObjectById(parentId)) return false;
+    child->setParentId(parentId);
+    return true;
 }
 
 glm::mat4 Scene::getWorldMatrix(std::uint64_t id) const
@@ -214,47 +161,23 @@ glm::mat4 Scene::getWorldMatrix(std::uint64_t id) const
     return getWorldMatrixRecursive(id, 0);
 }
 
-glm::mat4 Scene::getWorldMatrixRecursive(
-    std::uint64_t id,
-    int depth
-) const
+glm::mat4 Scene::getWorldMatrixRecursive(std::uint64_t id, int depth) const
 {
-    if (depth > static_cast<int>(objects.size()))
-    {
-        return glm::mat4(1.0f);
-    }
-
-    const GameObject* object = findObjectById(id);
-
-    if (object == nullptr)
-    {
-        return glm::mat4(1.0f);
-    }
-
-    const glm::mat4 localMatrix =
-        object->getTransform().getLocalMatrix();
-
-    const std::uint64_t parentId = object->getParentId();
-
-    if (parentId == 0)
-    {
-        return localMatrix;
-    }
-
-    return getWorldMatrixRecursive(parentId, depth + 1)
-        * localMatrix;
+    if (depth > 32) return glm::mat4(1.0f);
+    const GameObject* obj = findObjectById(id);
+    if (!obj) return glm::mat4(1.0f);
+    glm::mat4 local = obj->getModelMatrix();
+    if (obj->getParentId() == 0) return local;
+    return getWorldMatrixRecursive(obj->getParentId(), depth + 1) * local;
 }
 
 void Scene::update(float deltaTime)
 {
-    for (const auto& object : objects)
-    {
-        object->update(deltaTime);
-    }
+    for (auto& obj : objects)
+        obj->update(deltaTime);
 }
 
-const std::vector<std::unique_ptr<GameObject>>&
-Scene::getObjects() const
+const std::vector<std::unique_ptr<GameObject>>& Scene::getObjects() const
 {
     return objects;
 }

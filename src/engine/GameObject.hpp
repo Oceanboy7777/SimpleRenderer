@@ -20,6 +20,18 @@ enum class MaterialType
     Ground
 };
 
+enum class UIType
+{
+    None = 0,
+    UIRoot,          // "New User Interface" entry in main hierarchy
+    Text,
+    TextBox,
+    ScrollFrame,
+    Frame,
+    CheckBox,
+    Button
+};
+
 class GameObject
 {
 public:
@@ -67,6 +79,25 @@ public:
     void setTexturePath(const std::string& path);
     void clearTexturePath();
 
+    // ---- UI support ----
+    bool isUI() const;                       // true for UIRoot or any UI element
+    bool isUIRoot() const;
+    UIType getUIType() const;
+    void setUIType(UIType type);
+
+    bool isVisible() const;
+    void setVisible(bool v);
+
+    int getZOrder() const;
+    void setZOrder(int z);
+
+    const std::string& getText() const;
+    void setText(const std::string& t);
+
+    // 2D rect used inside UI Designer (local to the designer canvas)
+    glm::vec2 getUISize() const;
+    void setUISize(const glm::vec2& s);
+
 private:
     std::uint64_t id;
     std::string name;
@@ -78,4 +109,11 @@ private:
     std::uint64_t parentId;
     std::string meshPath;
     std::string texturePath;
+
+    // UI
+    UIType uiType = UIType::None;
+    bool visible = true;
+    int zOrder = 0;
+    std::string textContent;
+    glm::vec2 uiSize{ 120.0f, 40.0f };
 };

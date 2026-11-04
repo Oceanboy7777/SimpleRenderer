@@ -20,7 +20,12 @@ InspectorPanel::InspectorPanel()
     setSize({ 280.0f, 700.0f });
     setBackgroundColor({ 0.12f, 0.13f, 0.16f, 0.95f });
     setupFields();
+    meshSearchBox.setPlaceholder("Search meshes...");
+    meshSearchBox.setSize({ 200.0f, 22.0f });
+    meshSearchBox.setOnChanged([this](const std::string& s) { meshSearchFilter = s; });
+    visibleCheckbox.setChecked(true);
 }
+
 
 void InspectorPanel::setupFields()
 {
@@ -229,7 +234,19 @@ void InspectorPanel::drawMeshSection(UIContext& ctx, float& y, GameObject* obj)
     if (!fs::exists(models))
         return;
 
-    int shown = 0;
+    // Search bar
+    Font::draw(ctx, world + glm::vec2(14.0f, y), "Search", glm::vec4(0.7f), 1.1f);
+    y += 18.0f;
+    meshSearchBox.setPosition(world + glm::vec2(14.0f, y));
+    meshSearchBox.setSize({ size.x - 28.0f, 22.0f });
+    meshSearchBox.draw(ctx);
+    y += 28.0f;
+
+    // Mesh list (scrollable region via parent panel size — list all matching)
+    std::string filter = meshSearchFilter;
+    for (char& ch : filter)
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
     for (auto& entry : fs::directory_iterator(models))
     {
         if (!entry.is_regular_file())
@@ -240,6 +257,13 @@ void InspectorPanel::drawMeshSection(UIContext& ctx, float& y, GameObject* obj)
         if (ext != ".obj")
             continue;
 
+        std::string fname = entry.path().filename().string();
+        std::string lower = fname;
+        for (char& c : lower)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (!filter.empty() && lower.find(filter) == std::string::npos)
+            continue;
+
         const std::string full = entry.path().string();
         glm::vec2 p = world + glm::vec2(14.0f, y);
         glm::vec2 s = { size.x - 28.0f, 24.0f };
@@ -247,12 +271,9 @@ void InspectorPanel::drawMeshSection(UIContext& ctx, float& y, GameObject* obj)
         ctx.drawRect(p, s, active
             ? glm::vec4(0.22f, 0.40f, 0.30f, 1.0f)
             : glm::vec4(0.18f, 0.19f, 0.23f, 1.0f));
-        Font::draw(ctx, p + glm::vec2(10.0f, 5.0f),
-            entry.path().filename().string(), glm::vec4(0.95f), 1.1f);
+        Font::draw(ctx, p + glm::vec2(10.0f, 5.0f), fname, glm::vec4(0.95f), 1.1f);
         meshHits.push_back({ full, p, s });
         y += 28.0f;
-        if (++shown >= 8)
-            break;
     }
 }
 
@@ -330,6 +351,7 @@ void InspectorPanel::draw(UIContext& ctx)
 
     meshHits.clear();
     textureHits.clear();
+    uiHits.clear();
     Panel::draw(ctx);
 
     const glm::vec2 world = getWorldPosition();
@@ -357,9 +379,32 @@ void InspectorPanel::draw(UIContext& ctx)
 
     layoutAndDrawFields(ctx, y);
     y += 8.0f;
-    drawMeshSection(ctx, y, obj);
-    y += 8.0f;
-    drawTextureSection(ctx, y, obj);
+    // UI-specific props
+    if (obj->isUI())
+    {
+        Font::draw(ctx, world + glm::vec2(14.0f, y),
+            "Visible", glm::vec4(0.55f, 0.75f, 1.0f, 1.0f), 1.25f);
+        y += 22.0f;
+        glm::vec2 vp = world + glm::vec2(14.0f, y);
+        glm::vec2 vs = { 22.0f, 22.0f };
+        ctx.drawRect(vp, vs, obj->isVisible()
+            ? glm::vec4(0.25f, 0.55f, 0.30f, 1.0f)
+            : glm::vec4(0.25f, 0.25f, 0.28f, 1.0f));
+        if (obj->isVisible())
+            Font::draw(ctx, vp + glm::vec2(4.0f, 3.0f), "X", glm::vec4(1.0f), 1.2f);
+        uiHits.push_back({ vp, vs, true });
+        y += 30.0f;
+
+        Font::draw(ctx, world + glm::vec2(14.0f, y),
+            "Z-Order: " + std::to_string(obj->getZOrder()), glm::vec4(0.85f), 1.15f);
+        y += 28.0f;
+    }
+
+    if (!obj->isUI())
+    {
+        drawMeshSection(ctx, y, obj);
+        // texture section intentionally removed
+    }
 }
 
 bool InspectorPanel::onMouseButton(int button, int action, const glm::vec2& worldMousePos)
@@ -383,6 +428,24 @@ bool InspectorPanel::onMouseButton(int button, int action, const glm::vec2& worl
 
     if (button != GLFW_MOUSE_BUTTON_LEFT || action != GLFW_PRESS)
         return false;
+
+    // UI visible toggle
+    for (const auto& hit : uiHits)
+    {
+        const bool inside =
+            worldMousePos.x >= hit.pos.x && worldMousePos.x <= hit.pos.x + hit.size.x &&
+            worldMousePos.y >= hit.pos.y && worldMousePos.y <= hit.pos.y + hit.size.y;
+        if (!inside) continue;
+        if (hit.isVisibleToggle)
+        {
+            GameObject* obj = scene ? scene->findObjectById(selectedId) : nullptr;
+            if (obj) obj->setVisible(!obj->isVisible());
+            return true;
+        }
+    }
+
+    if (meshSearchBox.onMouseButton(button, action, worldMousePos))
+        return true;
 
     for (const auto& hit : meshHits)
     {
@@ -430,10 +493,12 @@ void InspectorPanel::onKey(int key, int action)
 {
     for (int i = 0; i < static_cast<int>(Field::Count); ++i)
         fields[i].onKey(key, action);
+    meshSearchBox.onKey(key, action);
 }
 
 void InspectorPanel::onChar(unsigned int codepoint)
 {
     for (int i = 0; i < static_cast<int>(Field::Count); ++i)
         fields[i].onChar(codepoint);
+    meshSearchBox.onChar(codepoint);
 }

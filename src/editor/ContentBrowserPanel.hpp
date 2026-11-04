@@ -3,6 +3,7 @@
 #include "ui/Panel.hpp"
 #include "ui/Checkbox.hpp"
 #include "ui/TextBox.hpp"
+#include "ui/ScrollFrame.hpp"
 
 #include "engine/ProjectManager.hpp"
 #include "engine/Scene.hpp"
@@ -31,6 +32,7 @@ public:
 
     void onKey(int key, int action);
     void onChar(unsigned int codepoint);
+    void onScroll(float yOffset);
 
 private:
     enum class EntryKind { Folder, File };
@@ -69,4 +71,7 @@ private:
     void openEntry(int index);
     void createFolder();
     void importAsset();
+
+    ScrollFrame gridScroll;
+    float gridContentH = 0.0f;
 };
