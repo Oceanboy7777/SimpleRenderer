@@ -13,8 +13,8 @@ namespace
 
     Ray screenToRay(const Camera& camera, int mouseX, int mouseY, int width, int height)
     {
-        const float w = static_cast<float>(std::max(width, 1));
-        const float h = static_cast<float>(std::max(height, 1));
+        const float w = static_cast<float>((std::max)(width, 1));
+        const float h = static_cast<float>((std::max)(height, 1));
         const float ndcX = (2.0f * mouseX) / w - 1.0f;
         const float ndcY = 1.0f - (2.0f * mouseY) / h;
         const float aspect = w / h;
@@ -47,8 +47,8 @@ namespace
                 float t1 = (mn - o) / d;
                 float t2 = (mx - o) / d;
                 if (t1 > t2) std::swap(t1, t2);
-                tmin = std::max(tmin, t1);
-                tmax = std::min(tmax, t2);
+                tmin = (std::max)(tmin, t1);
+                tmax = (std::min)(tmax, t2);
                 if (tmin > tmax)
                     return false;
             }
@@ -75,25 +75,28 @@ std::uint64_t Picker::pickObject(
 
     for (const auto& obj : scene.getObjects())
     {
+        // UI elements are not world-selectable
+        if (obj->isUI())
+            continue;
+
         const glm::vec3 pos = obj->getPosition();
         const glm::vec3 scale = obj->getScale();
 
+        // Generous world AABB so distant objects remain selectable
         glm::vec3 half;
         if (obj->getMeshType() == MeshType::Plane)
         {
-            half = glm::vec3(scale.x * 0.5f, 0.05f, scale.z * 0.5f);
+            half = glm::vec3((std::max)(scale.x * 0.5f, 0.5f), 0.25f, (std::max)(scale.z * 0.5f, 0.5f));
         }
         else if (!obj->getMeshPath().empty() || obj->getMeshType() == MeshType::ImportedModel)
         {
-            // Custom meshes: local verts often ~[-1,1] but can be larger.
-            // Expand pick volume with object scale (generous until true AABB is wired).
-            half = glm::abs(scale) * 1.5f;
-            half = glm::max(half, glm::vec3(0.25f));
+            half = glm::abs(scale) * 2.0f;
+            half = glm::max(half, glm::vec3(0.5f));
         }
         else
         {
-            // Unit cube in [-1,1] → half size = scale
-            half = glm::abs(scale);
+            // Unit cube in [-1,1] → half extents = scale; min size for pickability
+            half = glm::max(glm::abs(scale), glm::vec3(0.35f));
         }
 
         const glm::vec3 minB = pos - half;

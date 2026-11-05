@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include <glad/gl.h>
 #include <GLFW/glfw3.h>
 
@@ -21,6 +22,7 @@
 #include "editor/TransformToolbar.hpp"
 #include "editor/PlayToolbar.hpp"
 #include "editor/UIDesignerPanel.hpp"
+#include "editor/DockLayout.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -85,6 +87,7 @@ namespace
         float leftW = 280.0f;
         float rightW = 280.0f;
         float bottomH = 180.0f;
+        DockLayout* dock = nullptr;
         ResizeEdge resizeEdge = ResizeEdge::None;
 
         // Gizmo drag
@@ -124,9 +127,9 @@ namespace
         glm::vec3& origin,
         glm::vec3& dir)
     {
-        const float ndcX = (2.0f * static_cast<float>(mx)) / static_cast<float>(std::max(w, 1)) - 1.0f;
-        const float ndcY = 1.0f - (2.0f * static_cast<float>(my)) / static_cast<float>(std::max(h, 1));
-        const float aspect = static_cast<float>(w) / static_cast<float>(std::max(h, 1));
+        const float ndcX = (2.0f * static_cast<float>(mx)) / static_cast<float>((std::max)(w, 1)) - 1.0f;
+        const float ndcY = 1.0f - (2.0f * static_cast<float>(my)) / static_cast<float>((std::max)(h, 1));
+        const float aspect = static_cast<float>(w) / static_cast<float>((std::max)(h, 1));
 
         const glm::mat4 invProj = glm::inverse(glm::perspective(
             glm::radians(camera.getFieldOfView()), aspect, 0.1f, 500.0f));
@@ -215,6 +218,17 @@ namespace
         const float w = static_cast<float>(fbW);
         const float h = static_cast<float>(fbH);
 
+        if (input->dock && input->appMode && *input->appMode == AppMode::Editor)
+        {
+            if (input->dock->onMouseMove(static_cast<float>(x), static_cast<float>(y)))
+            {
+                input->leftW = input->dock->leftW;
+                input->rightW = input->dock->rightW;
+                input->bottomH = input->dock->bottomH;
+                return;
+            }
+        }
+
         if (input->resizeEdge != ResizeEdge::None)
         {
             constexpr float minSide = 180.0f;
@@ -247,7 +261,16 @@ namespace
                 {
                     glm::vec3 ro;
                     glm::vec3 rd;
-                    screenToRay(*input->camera, static_cast<int>(x), static_cast<int>(y), fbW, fbH, ro, rd);
+                    int gx = static_cast<int>(x), gy = static_cast<int>(y), gw = fbW, gh = fbH;
+                    if (input->dock)
+                    {
+                        const DockRect vp = input->dock->viewportRect();
+                        gx = static_cast<int>(x - vp.x);
+                        gy = static_cast<int>(y - vp.y);
+                        gw = (std::max)(1, static_cast<int>(vp.w));
+                        gh = (std::max)(1, static_cast<int>(vp.h));
+                    }
+                    screenToRay(*input->camera, gx, gy, gw, gh, ro, rd);
 
                     glm::vec3 axisDir(0.0f);
                     axisDir[input->gizmoAxis] = 1.0f;
@@ -278,7 +301,7 @@ namespace
                 {
                     const float dy = input->gizmoDragStartMouseY - static_cast<float>(y);
                     glm::vec3 scale = input->gizmoDragStartScale;
-                    scale[input->gizmoAxis] = std::max(0.05f, input->gizmoDragStartScale[input->gizmoAxis] + dy * 0.01f);
+                    scale[input->gizmoAxis] = (std::max)(0.05f, input->gizmoDragStartScale[input->gizmoAxis] + dy * 0.01f);
                     t.setScale(scale);
                 }
 
@@ -331,6 +354,19 @@ namespace
             }
         }
 
+        if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_RELEASE && input->dock)
+        {
+            double mx = 0.0, my = 0.0;
+            glfwGetCursorPos(window, &mx, &my);
+            if (input->dock->onMouseButton(static_cast<float>(mx), static_cast<float>(my), 0, false))
+            {
+                input->leftW = input->dock->leftW;
+                input->rightW = input->dock->rightW;
+                input->bottomH = input->dock->bottomH;
+            }
+            input->resizeEdge = ResizeEdge::None;
+        }
+
         if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS)
         {
             int fbW = 0;
@@ -342,29 +378,50 @@ namespace
             glfwGetCursorPos(window, &mx, &my);
 
             if (input->appMode && *input->appMode == AppMode::Editor
-                && input->editMode && *input->editMode)
+                && input->editMode && *input->editMode && input->dock)
             {
-                const float wf = static_cast<float>(fbW);
-                const float hf = static_cast<float>(fbH);
                 const float xf = static_cast<float>(mx);
                 const float yf = static_cast<float>(my);
-                const float grip = 6.0f;
 
-                input->resizeEdge = ResizeEdge::None;
-                if (std::abs(xf - input->leftW) <= grip && yf < hf - input->bottomH)
-                    input->resizeEdge = ResizeEdge::Left;
-                else if (std::abs(xf - (wf - input->rightW)) <= grip && yf < hf - input->bottomH)
-                    input->resizeEdge = ResizeEdge::Right;
-                else if (std::abs(yf - (hf - input->bottomH)) <= grip)
-                    input->resizeEdge = ResizeEdge::Bottom;
+                // Dock title-bar drag / split grips handled by DockLayout
+                if (input->dock->onMouseButton(xf, yf, 0, true))
+                {
+                    input->resizeEdge = ResizeEdge::None;
+                    // Sync sizes back
+                    input->leftW = input->dock->leftW;
+                    input->rightW = input->dock->rightW;
+                    input->bottomH = input->dock->bottomH;
+                }
+                else
+                {
+                    input->resizeEdge = ResizeEdge::None;
+                }
             }
 
             const bool overUI = (g_ui && g_ui->isMouseOverUI());
+            // Prefer viewport hit-testing when dock is active
+            bool overViewport = true;
+            int pickX = static_cast<int>(mx);
+            int pickY = static_cast<int>(my);
+            int pickW = fbW;
+            int pickH = fbH;
+            if (input->dock && input->appMode && *input->appMode == AppMode::Editor)
+            {
+                const DockRect vp = input->dock->viewportRect();
+                overViewport = vp.contains(static_cast<float>(mx), static_cast<float>(my));
+                pickX = static_cast<int>(mx - vp.x);
+                pickY = static_cast<int>(my - vp.y);
+                pickW = (std::max)(1, static_cast<int>(vp.w));
+                pickH = (std::max)(1, static_cast<int>(vp.h));
+            }
+
             if (!overUI
+                && overViewport
                 && input->resizeEdge == ResizeEdge::None
                 && input->appMode && *input->appMode == AppMode::Editor
                 && input->editMode && *input->editMode
-                && input->scene && input->camera && input->hierarchy)
+                && input->scene && input->camera && input->hierarchy
+                && !(input->dock && input->dock->isDragging()))
             {
                 const std::uint64_t sel = input->hierarchy->getSelectedId();
                 if (sel != 0)
@@ -375,10 +432,10 @@ namespace
                         const int axis = pickGizmoAxis(
                             *input->camera,
                             obj->getPosition(),
-                            static_cast<int>(mx),
-                            static_cast<int>(my),
-                            fbW,
-                            fbH);
+                            pickX,
+                            pickY,
+                            pickW,
+                            pickH);
 
                         if (axis >= 0)
                         {
@@ -394,10 +451,10 @@ namespace
                             glm::vec3 rd;
                             screenToRay(
                                 *input->camera,
-                                static_cast<int>(mx),
-                                static_cast<int>(my),
-                                fbW,
-                                fbH,
+                                pickX,
+                                pickY,
+                                pickW,
+                                pickH,
                                 ro,
                                 rd);
 
@@ -423,10 +480,10 @@ namespace
                 const std::uint64_t id = Picker::pickObject(
                     *input->scene,
                     *input->camera,
-                    static_cast<int>(mx),
-                    static_cast<int>(my),
-                    fbW,
-                    fbH);
+                    pickX,
+                    pickY,
+                    pickW,
+                    pickH);
 
                 // Click empty space → clear selection
                 input->hierarchy->setSelectedId(id);
@@ -584,34 +641,38 @@ namespace
         SceneDialog* dialog,
         TransformToolbar* transformTb,
         PlayToolbar* playTb,
-        const InputState& input,
+        DockLayout& dock,
         int width,
         int height)
     {
+        constexpr float tabBarH = 28.0f;
         const float w = static_cast<float>(width);
         const float h = static_cast<float>(height);
-        const float leftW = input.leftW;
-        const float rightW = input.rightW;
-        const float bottomH = input.bottomH;
 
-        constexpr float tabBarH = 28.0f;
+        dock.setWindowSize(w, h, tabBarH);
+        dock.recompute();
 
-        hierarchy->setPosition({ 0.0f, tabBarH });
-        hierarchy->setSize({ leftW, h - bottomH - tabBarH });
+        auto place = [&](DockPanelId id, auto* panel)
+        {
+            if (!panel) return;
+            const DockRect body = dock.panelBodyRect(id);
+            panel->setPosition({ body.x, body.y });
+            panel->setSize({ body.w, body.h });
+        };
 
-        inspector->setPosition({ w - rightW, tabBarH });
-        inspector->setSize({ rightW, h - bottomH - tabBarH });
-
-        content->setPosition({ 0.0f, h - bottomH });
-        content->setSize({ w, bottomH });
+        place(DockPanelId::Hierarchy, hierarchy);
+        place(DockPanelId::Inspector, inspector);
+        place(DockPanelId::ContentBrowser, content);
 
         dialog->setPosition({ w * 0.5f - 300.0f, h * 0.5f - 180.0f });
         dialog->setSize({ 600.0f, 360.0f });
 
-        transformTb->setPosition({ w - rightW - 168.0f - 8.0f, tabBarH + 8.0f });
+        // Toolbars float inside the viewport slot
+        const DockRect vp = dock.viewportRect();
+        transformTb->setPosition({ vp.x + vp.w - 176.0f, vp.y + DockLayout::kTitleH + 6.0f });
         transformTb->setSize({ 168.0f, 36.0f });
 
-        playTb->setPosition({ w * 0.5f - 70.0f, tabBarH + 8.0f });
+        playTb->setPosition({ vp.x + vp.w * 0.5f - 70.0f, vp.y + DockLayout::kTitleH + 6.0f });
         playTb->setSize({ 140.0f, 36.0f });
     }
 }
@@ -744,9 +805,10 @@ int main()
             glfwSetWindowTitle(window, "SimpleRenderer - UI Designer");
         });
 
-    ui.getRoot().addChild(std::move(hierarchy));
-    ui.getRoot().addChild(std::move(inspector));
+    // Content & inspector first; hierarchy last so its dropdowns draw on top
     ui.getRoot().addChild(std::move(contentBrowser));
+    ui.getRoot().addChild(std::move(inspector));
+    ui.getRoot().addChild(std::move(hierarchy));
     ui.getRoot().addChild(std::move(sceneDialog));
     ui.getRoot().addChild(std::move(transformToolbar));
     ui.getRoot().addChild(std::move(playToolbar));
@@ -759,6 +821,13 @@ int main()
     input.transformToolbar = transformTb;
     input.appMode = &mode;
     input.editMode = &editMode;
+
+    DockLayout dock;
+    input.dock = &dock;
+    // Sync initial split sizes
+    dock.leftW = input.leftW;
+    dock.rightW = input.rightW;
+    dock.bottomH = input.bottomH;
 
     glfwSetWindowUserPointer(window, &input);
     glfwSetCursorPosCallback(window, cursorPosCallback);
@@ -824,7 +893,7 @@ int main()
     while (!glfwWindowShouldClose(window))
     {
         const float now = static_cast<float>(glfwGetTime());
-        const float dt = std::min(now - lastTime, 0.1f);
+        const float dt = (std::min)(now - lastTime, 0.1f);
         lastTime = now;
 
         int width = 0;
@@ -871,17 +940,17 @@ int main()
                 tabHits.clear();
                 float tx = 6.0f;
                 auto drawTab = [&](const std::string& label, bool active, std::uint64_t id)
-                    {
-                        const float pad = 14.0f;
-                        const float tw = Font::getTextWidth(label, 1.15f) + pad * 2.0f;
-                        glm::vec2 tp = { tx, 2.0f };
-                        glm::vec2 ts = { tw, tabBarH - 4.0f };
-                        ui.drawRect(tp, ts, active ? glm::vec4(0.22f, 0.38f, 0.72f, 1.0f)
-                            : glm::vec4(0.16f, 0.17f, 0.21f, 1.0f));
-                        Font::draw(ui, tp + glm::vec2(pad, 6.0f), label, glm::vec4(0.95f), 1.15f);
-                        tabHits.push_back({ id, tx, tx + tw });
-                        tx += tw + 4.0f;
-                    };
+                {
+                    const float pad = 14.0f;
+                    const float tw = Font::getTextWidth(label, 1.15f) + pad * 2.0f;
+                    glm::vec2 tp = { tx, 2.0f };
+                    glm::vec2 ts = { tw, tabBarH - 4.0f };
+                    ui.drawRect(tp, ts, active ? glm::vec4(0.22f, 0.38f, 0.72f, 1.0f)
+                                               : glm::vec4(0.16f, 0.17f, 0.21f, 1.0f));
+                    Font::draw(ui, tp + glm::vec2(pad, 6.0f), label, glm::vec4(0.95f), 1.15f);
+                    tabHits.push_back({ id, tx, tx + tw });
+                    tx += tw + 4.0f;
+                };
                 drawTab("Main Engine", false, 0);
                 for (const auto& op : scene.getObjects())
                 {
@@ -952,9 +1021,29 @@ int main()
             }
             playWasDown = playDown;
 
+            // Keep dock splits in sync with input (resize grips update dock)
+            dock.leftW = input.leftW;
+            dock.rightW = input.rightW;
+            dock.bottomH = input.bottomH;
+
+            if (!editMode)
+            {
+                // Play mode: viewport fills the client area under the tab bar
+                dock.leftW = 0.0f;
+                dock.rightW = 0.0f;
+                dock.bottomH = 0.0f;
+            }
+
             layoutEditorPanels(
                 hierarchyPtr, inspectorPtr, contentPtr, dialogPtr,
-                transformTb, playTb, input, width, height);
+                transformTb, playTb, dock, width, height);
+
+            if (editMode)
+            {
+                input.leftW = dock.leftW;
+                input.rightW = dock.rightW;
+                input.bottomH = dock.bottomH;
+            }
 
             playTb->setVisible(true);
             transformTb->setVisible(editMode);
@@ -969,22 +1058,44 @@ int main()
             processKeyboard(window, camera, dt, true);
             scene.update(dt);
 
+            // Full window clear (panel chrome background)
+            glDisable(GL_SCISSOR_TEST);
+            glViewport(0, 0, width, height);
+            glClearColor(0.08f, 0.09f, 0.12f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
             const std::uint64_t selectedId =
                 editMode ? hierarchyPtr->getSelectedId() : 0;
 
-            if (renderer.isValid())
+            // 3D only in the Viewport dock slot
+            const DockRect vp = dock.viewportRect();
+            const int vpx = static_cast<int>(vp.x);
+            const int vpy = static_cast<int>(vp.y);
+            const int vpw = (std::max)(1, static_cast<int>(vp.w));
+            const int vph = (std::max)(1, static_cast<int>(vp.h));
+            // OpenGL origin is bottom-left
+            const int glY = height - vpy - vph;
+
+            if (renderer.isValid() && vpw > 1 && vph > 1)
             {
+                glEnable(GL_SCISSOR_TEST);
+                glScissor(vpx, glY, vpw, vph);
+                glViewport(vpx, glY, vpw, vph);
+                glClearColor(0.10f, 0.11f, 0.14f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
                 renderer.render(
                     scene,
                     camera,
-                    width,
-                    height,
+                    vpw,
+                    vph,
                     selectedId,
                     input.gizmoMode,
                     editMode
                 );
+
+                glDisable(GL_SCISSOR_TEST);
+                glViewport(0, 0, width, height);
             }
 
             if (editMode)
@@ -997,6 +1108,11 @@ int main()
 
             ui.beginFrame(dt);
 
+            // Dock title bars + drop highlights (under panels' own draw which already ran in endFrame... 
+            // beginFrame updates widgets; we draw chrome here before endFrame draws the tree)
+            if (editMode)
+                dock.drawChrome(ui);
+
             {
                 const float tabBarH = 28.0f;
                 const float w = static_cast<float>(width);
@@ -1004,20 +1120,20 @@ int main()
 
                 float tx = 6.0f;
                 auto drawTab = [&](const std::string& label, bool active, std::uint64_t id)
-                    {
-                        const float pad = 14.0f;
-                        const float tw = Font::getTextWidth(label, 1.15f) + pad * 2.0f;
-                        const float th = tabBarH - 4.0f;
-                        glm::vec2 tp = { tx, 2.0f };
-                        glm::vec2 ts = { tw, th };
-                        if (active)
-                            ui.drawRect(tp, ts, glm::vec4(0.22f, 0.38f, 0.72f, 1.0f));
-                        else
-                            ui.drawRect(tp, ts, glm::vec4(0.16f, 0.17f, 0.21f, 1.0f));
-                        Font::draw(ui, tp + glm::vec2(pad, 6.0f), label, glm::vec4(0.95f), 1.15f);
-                        tabHits.push_back({ id, tx, tx + tw });
-                        tx += tw + 4.0f;
-                    };
+                {
+                    const float pad = 14.0f;
+                    const float tw = Font::getTextWidth(label, 1.15f) + pad * 2.0f;
+                    const float th = tabBarH - 4.0f;
+                    glm::vec2 tp = { tx, 2.0f };
+                    glm::vec2 ts = { tw, th };
+                    if (active)
+                        ui.drawRect(tp, ts, glm::vec4(0.22f, 0.38f, 0.72f, 1.0f));
+                    else
+                        ui.drawRect(tp, ts, glm::vec4(0.16f, 0.17f, 0.21f, 1.0f));
+                    Font::draw(ui, tp + glm::vec2(pad, 6.0f), label, glm::vec4(0.95f), 1.15f);
+                    tabHits.push_back({ id, tx, tx + tw });
+                    tx += tw + 4.0f;
+                };
 
                 drawTab("Main Engine", true, 0); // currently in editor = main active
 
@@ -1061,25 +1177,25 @@ int main()
                                     playTb->setVisible(false);
                                     uiDesignerPtr->setContentBrowser(contentPtr);
                                     uiDesignerPtr->setOnSave([&]()
-                                        {
-                                            const auto path = hierarchyPtr->getCurrentScenePath();
-                                            if (!path.empty())
-                                                SceneSerializer::save(scene, path.string());
-                                        });
+                                    {
+                                        const auto path = hierarchyPtr->getCurrentScenePath();
+                                        if (!path.empty())
+                                            SceneSerializer::save(scene, path.string());
+                                    });
                                     uiDesignerPtr->setOnClose([&]()
-                                        {
-                                            const std::uint64_t rid = uiDesignerPtr->getUIRootId();
-                                            if (rid != 0)
-                                                scene.removeObject(rid);
-                                            mode = AppMode::Editor;
-                                            uiDesignerPtr->setVisible(false);
-                                            hierarchyPtr->setVisible(true);
-                                            inspectorPtr->setVisible(true);
-                                            contentPtr->setVisible(true);
-                                            transformTb->setVisible(true);
-                                            playTb->setVisible(true);
-                                            glfwSetWindowTitle(window, "SimpleRenderer - Editor");
-                                        });
+                                    {
+                                        const std::uint64_t rid = uiDesignerPtr->getUIRootId();
+                                        if (rid != 0)
+                                            scene.removeObject(rid);
+                                        mode = AppMode::Editor;
+                                        uiDesignerPtr->setVisible(false);
+                                        hierarchyPtr->setVisible(true);
+                                        inspectorPtr->setVisible(true);
+                                        contentPtr->setVisible(true);
+                                        transformTb->setVisible(true);
+                                        playTb->setVisible(true);
+                                        glfwSetWindowTitle(window, "SimpleRenderer - Editor");
+                                    });
                                     glfwSetWindowTitle(window, "SimpleRenderer - UI Designer");
                                 }
                                 break;

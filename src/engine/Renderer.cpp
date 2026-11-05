@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include "Renderer.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -324,9 +325,12 @@ void Renderer::renderShadowPass(const Scene& scene)
 
     for (const auto& object : scene.getObjects())
     {
+        // UI has no physical mesh — must not cast shadows
+        if (object->isUI())
+            continue;
         const glm::mat4 model = scene.getWorldMatrix(object->getId());
         shadowShader.setMatrix4("model", glm::value_ptr(model));
-        meshForObject(*object).draw();   // ONLY this
+        meshForObject(*object).draw();
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -476,7 +480,7 @@ void Renderer::drawGrid(
 
     const float aspect =
         static_cast<float>(viewportWidth) /
-        static_cast<float>(std::max(viewportHeight, 1));
+        static_cast<float>((std::max)(viewportHeight, 1));
     const glm::mat4 projection = glm::perspective(
         glm::radians(camera.getFieldOfView()), aspect, 0.1f, 500.0f);
     const glm::mat4 view = camera.getViewMatrix();
@@ -517,7 +521,7 @@ void Renderer::drawGizmo(
 
     const float aspect =
         static_cast<float>(viewportWidth) /
-        static_cast<float>(std::max(viewportHeight, 1));
+        static_cast<float>((std::max)(viewportHeight, 1));
     const glm::mat4 projection = glm::perspective(
         glm::radians(camera.getFieldOfView()), aspect, 0.1f, 500.0f);
     const glm::mat4 view = camera.getViewMatrix();
@@ -582,7 +586,7 @@ void Renderer::drawSelectionOutline(
 
     const float aspect =
         static_cast<float>(viewportWidth) /
-        static_cast<float>(std::max(viewportHeight, 1));
+        static_cast<float>((std::max)(viewportHeight, 1));
     const glm::mat4 projection = glm::perspective(
         glm::radians(camera.getFieldOfView()), aspect, 0.1f, 500.0f);
     const glm::mat4 view = camera.getViewMatrix();
@@ -644,10 +648,10 @@ void Renderer::drawUIOverlay(
 
     std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
         return a.obj->getZOrder() < b.obj->getZOrder();
-        });
+    });
 
-    const float w = static_cast<float>(std::max(viewportWidth, 1));
-    const float h = static_cast<float>(std::max(viewportHeight, 1));
+    const float w = static_cast<float>((std::max)(viewportWidth, 1));
+    const float h = static_cast<float>((std::max)(viewportHeight, 1));
     // Ortho: origin top-left to match UI designer coords
     glm::mat4 proj = glm::ortho(0.0f, w, h, 0.0f, -1.0f, 1.0f);
     glm::mat4 view(1.0f);
@@ -700,7 +704,7 @@ void Renderer::render(
 
     const float aspectRatio =
         static_cast<float>(viewportWidth) /
-        static_cast<float>(std::max(viewportHeight, 1));
+        static_cast<float>((std::max)(viewportHeight, 1));
 
     const glm::mat4 view = camera.getViewMatrix();
     const glm::mat4 projection = glm::perspective(

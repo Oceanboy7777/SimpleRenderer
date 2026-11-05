@@ -1,4 +1,6 @@
+#define NOMINMAX
 #include "HierarchyPanel.hpp"
+#include <glad/gl.h>
 #include "SceneDialog.hpp"
 #include "ui/UIContext.hpp"
 #include "ui/Font.hpp"
@@ -108,7 +110,7 @@ void HierarchyPanel::deleteSelected()
 {
     if (!scene || selectedId == 0) return;
     GameObject* obj = scene->findObjectById(selectedId);
-
+    
     if (scene->removeObject(selectedId))
     {
         if (renaming && renameId == selectedId) cancelRename();
@@ -224,6 +226,17 @@ void HierarchyPanel::draw(UIContext& ctx)
 
     const glm::vec2 wp = getWorldPosition();
 
+    // Clip contents when dock slot is small (dropdowns disable scissor later)
+    {
+        const int fbH = ctx.getFramebufferHeight();
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(
+            (int)wp.x,
+            fbH - (int)(wp.y + size.y),
+            (std::max)(1, (int)size.x),
+            (std::max)(1, (int)size.y));
+    }
+
     Font::draw(ctx, wp + glm::vec2(kPadX, 10.0f),
         "Hierarchy", glm::vec4(0.85f, 0.9f, 1.0f, 1.0f), 1.7f);
 
@@ -240,18 +253,26 @@ void HierarchyPanel::draw(UIContext& ctx)
 
     // Save / Load / Del
     const float toolY = 84.0f;
-    auto toolBtn = [&](float x, const char* label, ActionHit::Type type, glm::vec4 col)
+    {
+        const float avail = (std::max)(48.0f, size.x - 24.0f);
+        const float btnW = (std::min)(80.0f, (avail - 16.0f) / 3.0f);
+        const float gap = 8.0f;
+        float bx = 12.0f;
+        auto toolBtn = [&](const char* label, ActionHit::Type type, glm::vec4 col)
         {
-            glm::vec2 p = wp + glm::vec2(x, toolY);
-            glm::vec2 s = { 80.0f, 26.0f };
+            glm::vec2 p = wp + glm::vec2(bx, toolY);
+            glm::vec2 s = { btnW, 26.0f };
             ctx.drawRect(p, s, col);
-            float tw = Font::getTextWidth(label, 1.25f);
-            Font::draw(ctx, p + glm::vec2((s.x - tw) * 0.5f, 6.0f), label, glm::vec4(1.0f), 1.25f);
+            float tw = Font::getTextWidth(label, 1.15f);
+            Font::draw(ctx, p + glm::vec2((std::max)(2.0f, (s.x - tw) * 0.5f), 6.0f),
+                label, glm::vec4(1.0f), 1.15f);
             actionHits.push_back({ type, p, s, -1 });
+            bx += btnW + gap;
         };
-    toolBtn(12.0f, "Save", ActionHit::Type::SaveScene, { 0.25f, 0.35f, 0.55f, 1.0f });
-    toolBtn(100.0f, "Load", ActionHit::Type::LoadScene, { 0.35f, 0.30f, 0.50f, 1.0f });
-    toolBtn(188.0f, "Del", ActionHit::Type::Delete, { 0.50f, 0.20f, 0.20f, 1.0f });
+        toolBtn("Save", ActionHit::Type::SaveScene, { 0.25f, 0.35f, 0.55f, 1.0f });
+        toolBtn("Load", ActionHit::Type::LoadScene, { 0.35f, 0.30f, 0.50f, 1.0f });
+        toolBtn("Del", ActionHit::Type::Delete, { 0.50f, 0.20f, 0.20f, 1.0f });
+    }
 
     const float listTop = 120.0f;
     const float listH = size.y - listTop - 8.0f;
@@ -423,6 +444,8 @@ void HierarchyPanel::draw(UIContext& ctx)
     listScroll.draw(ctx);
 
     // Create popup
+    glDisable(GL_SCISSOR_TEST); // dropdowns render above other panels, unclipped
+
     if (createMenuOpen)
     {
         glm::vec2 menuPos = lastCreateButtonPos + glm::vec2(0.0f, 28.0f);

@@ -1,4 +1,7 @@
+#define NOMINMAX
 #include "InspectorPanel.hpp"
+#include <glad/gl.h>
+#include <algorithm>
 #include "ui/UIContext.hpp"
 #include "ui/Font.hpp"
 #include "engine/Transform.hpp"
@@ -22,7 +25,7 @@ InspectorPanel::InspectorPanel()
     setupFields();
     meshSearchBox.setPlaceholder("Search meshes...");
     meshSearchBox.setSize({ 200.0f, 22.0f });
-    meshSearchBox.setOnChanged([this](const std::string& s) { meshSearchFilter = s; });
+    meshSearchBox.setOnChanged([this](const std::string& s){ meshSearchFilter = s; });
     visibleCheckbox.setChecked(true);
 }
 
@@ -138,9 +141,9 @@ void InspectorPanel::applyField(Field field, const std::string& text)
     case Field::ScaleX: case Field::ScaleY: case Field::ScaleZ:
     {
         glm::vec3 s = obj->getScale();
-        if (field == Field::ScaleX) s.x = std::max(0.05f, v);
-        if (field == Field::ScaleY) s.y = std::max(0.05f, v);
-        if (field == Field::ScaleZ) s.z = std::max(0.05f, v);
+        if (field == Field::ScaleX) s.x = (std::max)(0.05f, v);
+        if (field == Field::ScaleY) s.y = (std::max)(0.05f, v);
+        if (field == Field::ScaleZ) s.z = (std::max)(0.05f, v);
         t.setScale(s);
         break;
     }
@@ -355,6 +358,13 @@ void InspectorPanel::draw(UIContext& ctx)
     Panel::draw(ctx);
 
     const glm::vec2 world = getWorldPosition();
+    {
+        const int fbH = ctx.getFramebufferHeight();
+        glEnable(GL_SCISSOR_TEST);
+        glScissor((int)world.x, fbH - (int)(world.y + size.y),
+                  (std::max)(1,(int)size.x), (std::max)(1,(int)size.y));
+    }
+
     Font::draw(ctx, world + glm::vec2(14.0f, 12.0f),
         "Inspector", glm::vec4(0.85f, 0.9f, 1.0f, 1.0f), 1.8f);
 
@@ -362,12 +372,16 @@ void InspectorPanel::draw(UIContext& ctx)
     {
         Font::draw(ctx, world + glm::vec2(14.0f, 50.0f),
             "No selection", glm::vec4(0.6f), 1.3f);
+        glDisable(GL_SCISSOR_TEST);
         return;
     }
 
     GameObject* obj = scene->findObjectById(selectedId);
     if (!obj)
+    {
+        glDisable(GL_SCISSOR_TEST);
         return;
+    }
 
     if (!anyFieldFocused() && lastSyncedId != selectedId)
         syncFieldsFromObject();
@@ -405,6 +419,8 @@ void InspectorPanel::draw(UIContext& ctx)
         drawMeshSection(ctx, y, obj);
         // texture section intentionally removed
     }
+
+    glDisable(GL_SCISSOR_TEST);
 }
 
 bool InspectorPanel::onMouseButton(int button, int action, const glm::vec2& worldMousePos)
